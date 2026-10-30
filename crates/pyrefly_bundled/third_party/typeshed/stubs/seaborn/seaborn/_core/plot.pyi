@@ -3,7 +3,7 @@ import os
 from _typeshed import Incomplete, SupportsKeysAndGetItem
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import IO, Any, Literal, NoReturn, TypedDict, TypeVar
+from typing import IO, Any, Literal, TypedDict, TypeVar
 from typing_extensions import Never, Self
 
 import matplotlib as mpl
@@ -72,7 +72,7 @@ class Plot:
     __signature__: inspect.Signature
     config: PlotConfig
     def __init__(self, *args: DataSource | VariableSpec, data: DataSource = None, **variables: VariableSpec) -> None: ...
-    def __add__(self, other: Never) -> NoReturn: ...
+    def __add__(self, other: Never) -> Never: ...
     def on(self, target: Axes | SubFigure | Figure) -> Plot: ...
     def add(
         self,
@@ -102,7 +102,7 @@ class Plot:
         self,
         *,
         size: tuple[float, float] | Default = ...,
-        engine: str | None | Default = ...,
+        engine: str | Default | None = ...,
         extent: tuple[float, float, float, float] | Default = ...,
     ) -> Plot: ...
     def theme(self, config: dict[str, Any], /) -> Plot: ...

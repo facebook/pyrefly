@@ -1,13 +1,19 @@
-from _typeshed import Incomplete
+from typing import TypedDict, type_check_only
 from typing_extensions import Self
+
+@type_check_only
+class _GraphqlVariables(TypedDict, total=False):
+    countryPhoneCode: str
+    phoneNumber: str
+    extensionNumber: str
 
 class PhoneInput:
     def __init__(
         self, country_phone_code: str | None = None, phone_number: str | None = None, extension_number: str | None = None
     ) -> None: ...
-    def to_graphql_variables(self) -> dict[str, Incomplete]: ...
+    def to_graphql_variables(self) -> _GraphqlVariables: ...
     @staticmethod
-    def builder() -> Builder: ...
+    def builder() -> Builder: ...  # pyrefly: ignore [unknown-name]
 
     class Builder:
         def __init__(self) -> None: ...

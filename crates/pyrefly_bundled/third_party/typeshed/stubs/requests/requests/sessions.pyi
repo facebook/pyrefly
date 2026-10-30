@@ -1,7 +1,7 @@
 from _typeshed import SupportsItems, SupportsRead, Unused
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
-from typing import Any, TypedDict, type_check_only
-from typing_extensions import Self, TypeAlias
+from typing import Any, TypeAlias, TypedDict, type_check_only
+from typing_extensions import Self
 
 from . import adapters, auth as _auth, compat, cookies, exceptions, hooks, models, status_codes, utils
 from .models import _JSON, Response
@@ -130,7 +130,7 @@ class Session(SessionRedirectMixin):
     max_redirects: int
     trust_env: bool
     cookies: RequestsCookieJar
-    adapters: MutableMapping[str, adapters.BaseAdapter]
+    adapters: MutableMapping[str, _BaseAdapter]
     def __init__(self) -> None: ...
     def __enter__(self) -> Self: ...
     def __exit__(self, *args: Unused) -> None: ...
@@ -142,7 +142,7 @@ class Session(SessionRedirectMixin):
         params: _Params | None = None,
         data: _Data | None = None,
         headers: _HeadersUpdateMapping | None = None,
-        cookies: None | RequestsCookieJar | _TextMapping = None,
+        cookies: RequestsCookieJar | _TextMapping | None = None,
         files: _Files | None = None,
         auth: _Auth | None = None,
         timeout: _Timeout | None = None,

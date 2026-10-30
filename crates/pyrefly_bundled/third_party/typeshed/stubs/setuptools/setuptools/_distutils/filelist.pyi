@@ -16,9 +16,10 @@ class FileList:
     def sort(self) -> None: ...
     def remove_duplicates(self) -> None: ...
     def process_template_line(self, line: str) -> None: ...
+
     @overload
     def include_pattern(
-        self, pattern: str, anchor: bool = True, prefix: str | None = None, is_regex: Literal[False] = False
+        self, pattern: str | None, anchor: bool = True, prefix: str | None = None, is_regex: Literal[False] = False
     ) -> bool: ...
     @overload
     def include_pattern(
@@ -26,9 +27,10 @@ class FileList:
     ) -> bool: ...
     @overload
     def include_pattern(self, pattern: str | Pattern[str], anchor: bool, prefix: str | None, is_regex: Literal[True]) -> bool: ...
+
     @overload
     def exclude_pattern(
-        self, pattern: str, anchor: bool = True, prefix: str | None = None, is_regex: Literal[False] = False
+        self, pattern: str | None, anchor: bool = True, prefix: str | None = None, is_regex: Literal[False] = False
     ) -> bool: ...
     @overload
     def exclude_pattern(

@@ -9,8 +9,8 @@ from _typeshed import structseq
 from collections.abc import Callable
 from threading import Thread
 from types import TracebackType
-from typing import Any, Final, NoReturn, final, overload
-from typing_extensions import TypeVarTuple, Unpack, deprecated, disjoint_base
+from typing import Any, Final, final, overload
+from typing_extensions import Never, TypeVarTuple, Unpack, deprecated, disjoint_base
 
 _Ts = TypeVarTuple("_Ts")
 
@@ -29,6 +29,7 @@ def _count() -> int:
     In most applications `threading.enumerate()` should be used instead.
     """
     ...
+
 @final
 class RLock:
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
@@ -64,7 +65,9 @@ class RLock:
         """
         ...
     __enter__ = acquire
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(
+        self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None, /
+    ) -> None:
         """
         release()
 
@@ -93,6 +96,7 @@ if sys.version_info >= (3, 13):
     def start_joinable_thread(
         function: Callable[[], object], handle: _ThreadHandle | None = None, daemon: bool = True
     ) -> _ThreadHandle: ...
+
     @final
     class lock:
         def acquire(self, blocking: bool = True, timeout: float = -1) -> bool: ...
@@ -106,7 +110,7 @@ if sys.version_info >= (3, 13):
         def locked_lock(self) -> bool: ...  # undocumented
         def __enter__(self) -> bool: ...
         def __exit__(
-            self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
+            self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None, /
         ) -> None: ...
 
     LockType = lock
@@ -244,6 +248,7 @@ def start_new_thread(function: Callable[..., object], args: tuple[Any, ...], kwa
     printed unless the exception is SystemExit.
     """
     ...
+
 @overload
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new(function: Callable[[Unpack[_Ts]], object], args: tuple[Unpack[_Ts]], /) -> int:
@@ -275,24 +280,19 @@ def start_new(function: Callable[..., object], args: tuple[Any, ...], kwargs: di
     """
     ...
 
-if sys.version_info >= (3, 10):
-    def interrupt_main(signum: signal.Signals = signal.SIGINT, /) -> None:
-        """
-        interrupt_main(signum=signal.SIGINT, /)
+def interrupt_main(signum: signal.Signals = signal.SIGINT, /) -> None:
+    """
+    interrupt_main(signum=signal.SIGINT, /)
 
-        Simulate the arrival of the given signal in the main thread,
-        where the corresponding signal handler will be executed.
-        If *signum* is omitted, SIGINT is assumed.
-        A subthread can use this function to interrupt the main thread.
+    Simulate the arrival of the given signal in the main thread,
+    where the corresponding signal handler will be executed.
+    If *signum* is omitted, SIGINT is assumed.
+    A subthread can use this function to interrupt the main thread.
 
-        Note: the default signal handler for SIGINT raises ``KeyboardInterrupt``.
-        """
-        ...
-
-else:
-    def interrupt_main() -> None: ...
-
-def exit() -> NoReturn:
+    Note: the default signal handler for SIGINT raises ``KeyboardInterrupt``.
+    """
+    ...
+def exit() -> Never:
     """
     exit()
     (exit_thread() is an obsolete synonym)
@@ -302,7 +302,7 @@ def exit() -> NoReturn:
     """
     ...
 @deprecated("Obsolete synonym. Use `exit()` instead.")
-def exit_thread() -> NoReturn:
+def exit_thread() -> Never:
     """
     exit()
     (exit_thread() is an obsolete synonym)
@@ -377,6 +377,7 @@ def get_native_id() -> int:
     particular thread within a system.
     """
     ...
+
 @final
 class _ExceptHookArgs(structseq[Any], tuple[type[BaseException], BaseException | None, TracebackType | None, Thread | None]):
     """
@@ -384,8 +385,7 @@ class _ExceptHookArgs(structseq[Any], tuple[type[BaseException], BaseException |
 
     Type used to pass arguments to threading.excepthook.
     """
-    if sys.version_info >= (3, 10):
-        __match_args__: Final = ("exc_type", "exc_value", "exc_traceback", "thread")
+    __match_args__: Final = ("exc_type", "exc_value", "exc_traceback", "thread")
 
     @property
     def exc_type(self) -> type[BaseException]:

@@ -33,18 +33,22 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
+use thin_vec::ThinVec;
+use vec1::Vec1;
 
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -59,6 +63,7 @@ use crate::binding::narrow::NarrowOps;
 use crate::binding::narrow::NarrowSource;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::Scope;
+use crate::binding::scope::TerminationKind;
 use crate::binding::scope::is_constant_name;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
@@ -69,6 +74,26 @@ use crate::types::types::AnyStyle;
 /// like reveal_type.
 fn is_special_name(name: &str) -> bool {
     matches!(name, "reveal_type" | "assert_type")
+}
+
+/// Walk a chain of `Expr::Attribute` nodes (e.g. `a.b.c`) and collect the
+/// base `ExprName` and attribute identifiers in order. Returns `None` if the
+/// chain doesn't bottom out in a Name.
+fn chase_static_attr_chain(mut expr: &Expr) -> Option<(ExprName, Vec1<Identifier>)> {
+    let mut attrs = Vec::new();
+    loop {
+        match expr {
+            Expr::Attribute(ExprAttribute { value, attr, .. }) => {
+                attrs.push(attr.clone());
+                expr = value;
+            }
+            Expr::Name(name) => {
+                attrs.reverse();
+                return Some((name.clone(), Vec1::try_from_vec(attrs).ok()?));
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Looking up names in an expression requires knowing the identity of the binding
@@ -82,9 +107,9 @@ pub enum Usage {
     /// Normal usage context that may pin partial types.
     /// The idx is the current binding being computed.
     CurrentIdx(Idx<Key>),
-    /// Narrowing context that should not pin partial types.
+    /// Value context that should not pin partial types.
     /// The idx (if present) is used for secondary-read detection.
-    Narrowing(Option<Idx<Key>>),
+    NonPinningValue(Option<Idx<Key>>),
     /// Static type context that should not pin partial types.
     /// When `is_annotation` is true, implicit alias validation is applied.
     StaticTypeInformation { is_annotation: bool },
@@ -93,15 +118,23 @@ pub enum Usage {
     /// alias bindings should produce Binding::TypeAliasRef instead of
     /// Binding::Forward.
     TypeAliasRhs,
+    /// Metadata of an `Annotated[...]` type form. Like `StaticTypeInformation`, but names may
+    /// refer to fields declared later in the enclosing class body when the annotation is not
+    /// evaluated where it appears.
+    AnnotatedMetadata {
+        allow_class_body_forward_reference: bool,
+    },
 }
 
 impl Usage {
-    /// Create a narrowing usage from another usage context.
-    pub fn narrowing_from(other: &Self) -> Self {
+    /// Create a non-pinning value usage from another usage context.
+    pub fn non_pinning_value_from(other: &Self) -> Self {
         match other {
-            Self::CurrentIdx(idx) => Self::Narrowing(Some(*idx)),
-            Self::Narrowing(idx) => Self::Narrowing(*idx),
-            Self::StaticTypeInformation { .. } | Self::TypeAliasRhs => Self::Narrowing(None),
+            Self::CurrentIdx(idx) => Self::NonPinningValue(Some(*idx)),
+            Self::NonPinningValue(idx) => Self::NonPinningValue(*idx),
+            Self::StaticTypeInformation { .. }
+            | Self::TypeAliasRhs
+            | Self::AnnotatedMetadata { .. } => Self::NonPinningValue(None),
         }
     }
 
@@ -109,15 +142,26 @@ impl Usage {
     pub fn current_idx(&self) -> Option<Idx<Key>> {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
-            Usage::Narrowing(idx) => *idx,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs => None,
+            Usage::NonPinningValue(idx) => *idx,
+            Usage::StaticTypeInformation { .. }
+            | Usage::TypeAliasRhs
+            | Usage::AnnotatedMetadata { .. } => None,
         }
     }
 
     /// Whether this usage context may pin partial types.
-    #[allow(dead_code)] // Will be used in Phase 5 of deferred BoundName implementation
     pub fn may_pin_partial_type(&self) -> bool {
         matches!(self, Usage::CurrentIdx(_))
+    }
+
+    /// Whether this usage is in a static type.
+    pub fn is_static(&self) -> bool {
+        matches!(
+            self,
+            Usage::StaticTypeInformation { .. }
+                | Usage::TypeAliasRhs
+                | Usage::AnnotatedMetadata { .. }
+        )
     }
 }
 
@@ -255,40 +299,63 @@ impl<'a> BindingsBuilder<'a> {
     /// does not require a mutable ref.
     pub fn ensure_expr_name(&mut self, x: &ExprName, usage: &mut Usage) -> Idx<Key> {
         let name = Ast::expr_name_identifier(x.clone());
-        self.ensure_name(&name, usage, &mut None)
+        self.ensure_name(&name, usage, None)
     }
 
     fn ensure_name(
         &mut self,
         name: &Identifier,
         usage: &mut Usage,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
+    ) -> Idx<Key> {
+        let allow_class_body_forward_reference = matches!(
+            usage,
+            Usage::AnnotatedMetadata {
+                allow_class_body_forward_reference: true
+            }
+        );
+        self.ensure_name_in_type(
+            name,
+            usage,
+            tparams_builder,
+            false,
+            allow_class_body_forward_reference,
+        )
+    }
+
+    fn ensure_name_in_type(
+        &mut self,
+        name: &Identifier,
+        usage: &mut Usage,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
+        is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
             usage,
             tparams_builder
-                .as_mut()
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
+            is_runtime_evaluated_annotation,
+            allow_class_body_forward_reference,
         )
     }
 
     fn ensure_simple_attr(
         &mut self,
         value: &Identifier,
-        attr: &Identifier,
+        attrs: Vec1<Identifier>,
         usage: &mut Usage,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             value,
             usage,
-            tparams_builder.as_mut().map(|tparams_builder| {
-                (
-                    tparams_builder,
-                    LegacyTParamId::Attr(value.clone(), attr.clone()),
-                )
+            tparams_builder.map(|tparams_builder| {
+                (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
+            false,
         )
     }
 
@@ -318,8 +385,11 @@ impl<'a> BindingsBuilder<'a> {
         name: &Identifier,
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
+        is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
-        let key = Key::BoundName(ShortIdentifier::new(name));
+        let short_name = ShortIdentifier::new(name);
+        let key = Key::BoundName(short_name);
         if name.is_empty() {
             // We only get empty identifiers if Ruff has done error correction,
             // so there must be a parse error.
@@ -331,25 +401,34 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
-        let used_in_static_type = matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
-        let lookup_result =
-            if used_in_static_type && let Some((tparams_collector, tparam_id)) = tparams_lookup {
-                self.intercept_lookup(tparams_collector, tparam_id)
-            } else {
-                self.lookup_name(Hashed::new(&name.id), usage)
-            };
+        // Names declared by `@shape_vars` are in scope only inside `Shaped` strings.
+        if let Some(shape_var) = self.shape_var(&name.id) {
+            return self.insert_binding(key, Binding::Quantified(Box::new(shape_var)));
+        }
+        let lookup_result = if usage.is_static()
+            && let Some((tparams_collector, tparam_id)) = tparams_lookup
+        {
+            self.intercept_lookup(tparams_collector, tparam_id)
+        } else {
+            self.lookup_name(Hashed::new(&name.id), usage)
+        };
         match lookup_result {
             NameLookupResult::Found {
                 idx: lookup_result_idx,
+                value_idx,
                 initialized: is_initialized,
                 is_module_scope,
+                is_outer_class_type_parameter,
             } => {
+                if is_outer_class_type_parameter {
+                    return self.insert_binding(
+                        key,
+                        Binding::OuterClassTypeParameter(lookup_result_idx, name.range),
+                    );
+                }
                 // Uninitialized local errors are only reported when we are neither in a stub
                 // nor a static type context.
-                if !used_in_static_type && !self.module_info.path().is_interface() {
+                if !usage.is_static() && !self.module_info.path().is_interface() {
                     if let Some(termination_keys) = is_initialized
                         .deferred_termination_keys()
                         .map(|s| s.to_vec())
@@ -368,6 +447,20 @@ impl<'a> BindingsBuilder<'a> {
                         self.error(name.range, ErrorKind::UnboundName, error_message);
                     }
                 }
+                if is_runtime_evaluated_annotation
+                    && matches!(
+                        usage,
+                        Usage::StaticTypeInformation {
+                            is_annotation: true
+                        }
+                    )
+                    && self.module_info.path().style() == ModuleStyle::Executable
+                    && !self.sys_info.version().at_least(3, 14)
+                    && !self.scopes.has_future_annotations()
+                    && let Some(error_message) = is_initialized.as_error_message(&name.id)
+                {
+                    self.error(name.range, ErrorKind::UnboundName, error_message);
+                }
 
                 // TODO: `global x` reads bypass this (they use Flow, not Anywhere).
 
@@ -378,12 +471,12 @@ impl<'a> BindingsBuilder<'a> {
                 if promote {
                     self.promote_ranges.insert(name.range);
                 }
-                self.defer_bound_name(key, lookup_result_idx, usage, promote)
+                self.defer_bound_name(short_name, lookup_result_idx, value_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
-                let suggestion = self
-                    .scopes
-                    .suggest_similar_name(&name.id, name.range.start());
+                if self.scopes.is_definitely_unreachable() {
+                    return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
+                }
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -395,25 +488,32 @@ impl<'a> BindingsBuilder<'a> {
                     );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 } else if self.scopes.in_class_body()
-                    && let Some((cls, _)) = self.scopes.current_class_and_metadata_keys()
+                    && let Some(cls) = self.scopes.current_class_key()
                 {
+                    let suggestion = self.suggest_similar_name(&name.id);
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
+                        Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
+                            class_key: cls,
+                            name: name.clone(),
+                            suggestion,
+                            allow_class_body_forward_reference,
+                        })),
                     )
                 } else {
-                    // Record a type error and fall back to `Any`.
-                    let header = format!("Could not find name `{name}`");
-                    if let Some(suggestion) = suggestion {
-                        self.error_with_detail(
-                            name.range,
-                            ErrorKind::UnknownName,
-                            header,
-                            format!("Did you mean `{suggestion}`?"),
-                        );
-                    } else {
-                        self.error(name.range, ErrorKind::UnknownName, header);
-                    }
+                    // Record a type error and fall back to `Any`. Searching the
+                    // scope for a near-miss is the expensive part of reporting
+                    // this, and it is worth nothing unless the error is kept, so
+                    // it waits until the builder knows that.
+                    self.error_with_detail_from(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        format!("Could not find name `{name}`"),
+                        || {
+                            self.suggest_similar_name(&name.id)
+                                .map(|suggestion| format!("Did you mean `{suggestion}`?"))
+                        },
+                    );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
@@ -461,14 +561,14 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(iterable_value_idx)
             });
             for x in comp.ifs.iter_mut() {
-                self.ensure_expr(x, &mut Usage::narrowing_from(usage));
+                self.ensure_expr(x, &mut Usage::non_pinning_value_from(usage));
                 let narrow_ops = NarrowOps::from_expr(self, Some(x));
                 self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(comp.range), usage);
             }
         }
     }
 
-    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
+    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage, kind: LambdaKind) {
         // Process default values in the enclosing scope before pushing the lambda scope,
         // because default values are evaluated at function definition time.
         if let Some(parameters) = &mut lambda.parameters {
@@ -488,10 +588,9 @@ impl<'a> BindingsBuilder<'a> {
             Identifier::new("<lambda>", lambda.range),
             false,
         ));
-        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name(), owner);
+                self.bind_lambda_param(x.name(), kind, usage);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
@@ -601,13 +700,25 @@ impl<'a> BindingsBuilder<'a> {
                 members,
                 false,
                 None,
+                &mut call.arguments.keywords,
             ),
             _ => unreachable!("caller only passes CollectionsNamedTuple or TypingNamedTuple"),
         };
         Some(self.insert_binding(
-            Key::Anon(call.range),
+            Key::Anon(call.range()),
             Binding::ClassDef(class_idx, Box::new([])),
         ))
+    }
+
+    /// Bind `narrow_ops` for evaluating `branch`, an operand of a conditional or boolean
+    /// expression that runs only when the narrows hold. A missing expression from
+    /// parse-error recovery reads no names, so it needs no narrows, and two of them can
+    /// share one empty range, which would give their narrows the same key.
+    fn bind_narrow_ops_for_branch(&mut self, narrow_ops: &NarrowOps, branch: &Expr, usage: &Usage) {
+        if matches!(branch, Expr::Name(name) if Ast::is_synthesized_empty_name(name)) {
+            return;
+        }
+        self.bind_narrow_ops(narrow_ops, NarrowUseLocation::Span(branch.range()), usage);
     }
 
     fn record_yield(&mut self, mut x: ExprYield) {
@@ -637,6 +748,33 @@ impl<'a> BindingsBuilder<'a> {
             yield_from_link,
             Binding::UsageLink(LinkedKey::YieldFrom(idx)),
         );
+    }
+
+    /// Bind the metadata items of an `Annotated[...]` type form. Names in them still resolve, but
+    /// the metadata is not type-checked, so their ranges are recorded and bindings created inside
+    /// them only report name resolution errors.
+    fn bind_annotated_metadata(
+        &mut self,
+        metadata: &mut [Expr],
+        allow_class_body_forward_reference: bool,
+    ) {
+        for e in metadata {
+            self.ensure_expr(
+                e,
+                &mut Usage::AnnotatedMetadata {
+                    allow_class_body_forward_reference,
+                },
+            );
+            self.annotated_metadata_ranges.push(e.range());
+        }
+    }
+
+    /// Whether names in a type may refer to fields declared later in the enclosing class body,
+    /// which is the case when the type is not evaluated where it appears.
+    fn allow_class_body_forward_reference_in_type(&self, in_string_literal: bool) -> bool {
+        in_string_literal
+            || self.scopes.has_future_annotations()
+            || self.sys_info.version().at_least(3, 14)
     }
 
     /// Execute through the expr, ensuring every name has a binding.
@@ -670,30 +808,72 @@ impl<'a> BindingsBuilder<'a> {
                     _ => None,
                 };
 
-                if let Some(special_export) = special_export
+                if self.is_map_int_tuples_with_provenance(value, special_export) {
+                    self.ensure_expr(&mut *value, usage);
+                    self.bind_map_int_tuples_arguments(
+                        &mut *slice,
+                        None,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
+                } else if let Some(special_export) = special_export
                     && special_export.is_static_type_subscript()
                 {
                     self.ensure_expr(&mut *value, usage);
                     let mut type_usage = Usage::StaticTypeInformation {
                         is_annotation: false,
                     };
-                    if special_export == SpecialExport::Annotated
-                        && let Expr::Tuple(tup) = &mut **slice
+                    if matches!(
+                        special_export,
+                        SpecialExport::Annotated | SpecialExport::Shaped
+                    ) && let Expr::Tuple(tup) = &mut **slice
                         && !tup.is_empty()
                     {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
-                        self.ensure_type_impl(&mut tup.elts[0], &mut None, false, &mut type_usage);
-                        for elt in tup.elts[1..].iter_mut() {
-                            self.ensure_expr(
-                                elt,
-                                &mut Usage::StaticTypeInformation {
-                                    is_annotation: false,
-                                },
-                            );
-                        }
+                        self.ensure_type_impl(
+                            &mut tup.elts[0],
+                            None,
+                            false,
+                            false,
+                            &mut type_usage,
+                            false,
+                        );
+                        self.bind_annotated_metadata(&mut tup.elts[1..], false);
                     } else {
-                        self.ensure_type_impl(&mut *slice, &mut None, false, &mut type_usage);
+                        self.ensure_type_impl(
+                            &mut *slice,
+                            None,
+                            false,
+                            false,
+                            &mut type_usage,
+                            false,
+                        );
                     }
+                } else if self.scopes.has_future_annotations()
+                    && let Expr::Name(name) = &**value
+                    && let Some((class_object_idx, FlowStyle::ClassDef { .. })) =
+                        self.scopes.binding_idx_for_name(&name.id)
+                    && self.class_object_is_generic(class_object_idx)
+                    && !matches!(
+                        &**slice,
+                        // String-keyed class subscripts, such as Enum member lookup, are runtime
+                        // expressions even when future annotations are active.
+                        Expr::StringLiteral(_)
+                    )
+                {
+                    self.ensure_expr(&mut *value, usage);
+                    self.ensure_type_impl(
+                        &mut *slice,
+                        None,
+                        false,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                        false,
+                    );
                 } else {
                     self.ensure_expr(&mut *value, usage);
                     self.ensure_expr(&mut *slice, usage);
@@ -703,21 +883,46 @@ impl<'a> BindingsBuilder<'a> {
                 // Ternary operation. We treat it like an if/else statement.
                 // Process the test before forking so walrus-defined names are
                 // in the base flow and visible to both branches.
-                self.ensure_expr(&mut x.test, &mut Usage::narrowing_from(usage));
+                self.ensure_expr(&mut x.test, &mut Usage::non_pinning_value_from(usage));
+                let static_test = self.sys_info.evaluate_bool_with_sys_info(&x.test);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
                 self.start_fork_and_branch(x.range);
-                self.bind_narrow_ops(&narrow_ops, NarrowUseLocation::Span(x.body.range()), usage);
-                self.ensure_expr(&mut x.body, usage);
-                // Negate the narrow ops for the `orelse`, then merge the Flows.
-                // TODO(stroxler): We eventually want to drop all narrows but merge values.
-                self.next_branch();
-                self.bind_narrow_ops(
-                    &narrow_ops.negate(),
-                    NarrowUseLocation::Span(x.range),
-                    usage,
-                );
-                self.ensure_expr(&mut x.orelse, usage);
-                self.finish_branch();
+                match static_test {
+                    Some(true) => {
+                        // Skip the `orelse` branch - it typically means a check (e.g. a sys
+                        // version, platform, or TYPE_CHECKING check) where the branch is not
+                        // statically analyzable. However, we still need to check for
+                        // `yield`/`yield from` in the skipped branch, because Python
+                        // determines generator status syntactically at compile time,
+                        // regardless of reachability.
+                        if Ast::expr_contains_yield(&x.orelse) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
+                        self.ensure_expr(&mut x.body, usage);
+                        self.finish_branch();
+                    }
+                    Some(false) => {
+                        if Ast::expr_contains_yield(&x.body) {
+                            self.scopes.mark_has_yield_in_dead_code();
+                        }
+                        self.abandon_branch();
+                        self.start_branch();
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                    None => {
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
+                        self.ensure_expr(&mut x.body, usage);
+                        // Negate the narrow ops for the `orelse`, then merge the Flows.
+                        // TODO(stroxler): We eventually want to drop all narrows but merge values.
+                        self.next_branch();
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
+                        self.ensure_expr(&mut x.orelse, usage);
+                        self.finish_branch();
+                    }
+                }
                 self.finish_exhaustive_fork();
             }
             Expr::BoolOp(ExprBoolOp {
@@ -743,18 +948,25 @@ impl<'a> BindingsBuilder<'a> {
                 if let Some(value) = values.next() {
                     // The first operation runs unconditionally, so any walrus-defined
                     // names will be added to the base flow.
-                    self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                    self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                     self.start_fork_and_branch(*range);
                     let mut narrow_ops = get_narrow_ops(self, value, *op);
+
+                    let short_circuit_trigger: Option<bool> = match op {
+                        BoolOp::And => Some(false),
+                        BoolOp::Or => Some(true),
+                    };
+                    if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                        self.scopes.set_definitely_unreachable(true);
+                    }
                     for value in values {
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(value.range()),
-                            usage,
-                        );
-                        self.ensure_expr(value, &mut Usage::narrowing_from(usage));
+                        self.bind_narrow_ops_for_branch(&narrow_ops, value, usage);
+                        self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
+                        if self.sys_info.evaluate_bool(value) == short_circuit_trigger {
+                            self.scopes.set_definitely_unreachable(true);
+                        }
                     }
                     // Negate the narrow ops in the base flow and merge.
                     // TODO(stroxler): We eventually want to drop all narrows but merge values.
@@ -774,7 +986,18 @@ impl<'a> BindingsBuilder<'a> {
                 // binding-variant choice — it drives a demand edge to
                 // `target::Exports`.
                 let special = self.as_special_export(&call.func);
-                let call_range = call.range;
+                // Factory creation (`wraps(f)`, including `@wraps(f)`) does not mutate a function.
+                // Applying the factory or calling `update_wrapper` may mutate aliased objects;
+                // argument splats and invalid calls are conservatively included in the summary.
+                if !self.has_functools_wrapper_mutation
+                    && (special == Some(SpecialExport::FunctoolsUpdateWrapper)
+                        || matches!(call.func.as_ref(), Expr::Call(factory)
+                            if self.as_special_export(&factory.func)
+                                == Some(SpecialExport::FunctoolsWraps)))
+                {
+                    self.has_functools_wrapper_mutation = true;
+                }
+                let call_range = call.range();
                 match special {
                     Some(
                         SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple,
@@ -788,7 +1011,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.ensure_expr(&mut call.func, usage);
                         for (i, arg) in call.arguments.args.iter_mut().enumerate() {
                             if i == 1 {
-                                self.ensure_type(arg, &mut None);
+                                self.ensure_type(arg, None);
                             } else {
                                 self.ensure_expr(arg, usage);
                             }
@@ -802,7 +1025,7 @@ impl<'a> BindingsBuilder<'a> {
                         // Forward-reference support in the first argument to a `cast` call.
                         self.ensure_expr(&mut call.func, usage);
                         if let Some(arg) = call.arguments.args.first_mut() {
-                            self.ensure_type(arg, &mut None)
+                            self.ensure_type(arg, None)
                         }
                         for arg in call.arguments.args.iter_mut().skip(1) {
                             self.ensure_expr(arg, usage);
@@ -811,7 +1034,7 @@ impl<'a> BindingsBuilder<'a> {
                             if let Some(id) = &kw.arg
                                 && id.as_str() == "typ"
                             {
-                                self.ensure_type(&mut kw.value, &mut None);
+                                self.ensure_type(&mut kw.value, None);
                             } else {
                                 self.ensure_expr(&mut kw.value, usage);
                             }
@@ -822,7 +1045,7 @@ impl<'a> BindingsBuilder<'a> {
                         // `TypeForm(expr)` — treat the argument as a type expression.
                         self.ensure_expr(&mut call.func, usage);
                         if let Some(arg) = call.arguments.args.first_mut() {
-                            self.ensure_type(arg, &mut None)
+                            self.ensure_type(arg, None)
                         }
                         for arg in call.arguments.args.iter_mut().skip(1) {
                             self.ensure_expr(arg, usage);
@@ -893,6 +1116,36 @@ impl<'a> BindingsBuilder<'a> {
                     }
                     _ => {}
                 }
+                // `reveal_type` observes a value without pinning partial types.
+                // It fires both when imported (`SpecialExport::RevealType`) and when
+                // used as a bare unimported name, which resolves to `special.is_none()`;
+                // the latter can't be a `match special` arm, so it's handled here.
+                let is_unimported_reveal_type = match &*call.func {
+                    Expr::Name(name) if special.is_none() && name.id.as_str() == "reveal_type" => {
+                        self.scopes.binding_idx_for_name(&name.id).is_none()
+                    }
+                    _ => false,
+                };
+                if special == Some(SpecialExport::RevealType) || is_unimported_reveal_type {
+                    self.ensure_expr(&mut call.func, usage);
+                    let args = call.arguments.args.split_first_mut();
+                    if let Some((first_arg, remaining_args)) = args {
+                        // `reveal_type` observes its first positional argument.
+                        // Extra arguments are analyzed normally.
+                        if matches!(first_arg, Expr::Name(_)) {
+                            self.ensure_expr(first_arg, &mut Usage::non_pinning_value_from(usage));
+                        } else {
+                            self.ensure_expr(first_arg, usage);
+                        }
+                        for arg in remaining_args {
+                            self.ensure_expr(arg, usage);
+                        }
+                    }
+                    for kw in call.arguments.keywords.iter_mut() {
+                        self.ensure_expr(&mut kw.value, usage);
+                    }
+                    return;
+                }
                 // `as_assert_in_test` is *not* a SpecialExport — it is a
                 // different classification of the callee. Its relative
                 // order with respect to the Exit/Quit/OsExit branch is
@@ -902,7 +1155,7 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.ensure_expr(&mut call.func, usage);
                     for arg in call.arguments.args.iter_mut() {
-                        self.ensure_expr(arg, &mut Usage::narrowing_from(usage));
+                        self.ensure_expr(arg, &mut Usage::non_pinning_value_from(usage));
                     }
                     for kw in call.arguments.keywords.iter_mut() {
                         self.ensure_expr(&mut kw.value, usage);
@@ -916,8 +1169,14 @@ impl<'a> BindingsBuilder<'a> {
                 ) {
                     x.recurse_mut(&mut |x| self.ensure_expr(x, usage));
                     // Control flow doesn't proceed after sys.exit(),
-                    // exit(), quit(), or os._exit().
-                    self.scopes.mark_flow_termination(false);
+                    // exit(), quit(), or os._exit(). The first three raise `SystemExit`,
+                    // which an enclosing `with` can swallow; `os._exit()` does not.
+                    let kind = if special == Some(SpecialExport::OsExit) {
+                        TerminationKind::Jump
+                    } else {
+                        TerminationKind::Raise
+                    };
+                    self.scopes.mark_flow_termination(kind);
                     return;
                 }
                 // Default: recurse into children as for any other expr.
@@ -936,15 +1195,11 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::Name(name) = &*x.target
                     && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
                 {
-                    self.scopes.define_in_enclosing_non_comprehension_scope(
-                        Hashed::new(&name.id),
-                        idx,
-                        FlowStyle::Other,
-                    );
+                    self.bind_name_in_enclosing_non_comprehension_scope(&name.id, idx);
                 }
             }
             Expr::Lambda(x) => {
-                self.bind_lambda(x, usage);
+                self.bind_lambda(x, usage, LambdaKind::Ordinary);
             }
             Expr::ListComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
@@ -963,7 +1218,9 @@ impl<'a> BindingsBuilder<'a> {
             Expr::DictComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
                     this.bind_comprehensions(x.range, &mut x.generators, usage, false);
-                    this.ensure_expr(&mut x.key, usage);
+                    if let Some(key) = &mut x.key {
+                        this.ensure_expr(key, usage);
+                    }
                     this.ensure_expr(&mut x.value, usage);
                     this.scopes.pop();
                 });
@@ -979,7 +1236,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, usage, &mut None);
+                self.ensure_name(&name, usage, None);
             }
             Expr::Yield(x) => {
                 self.record_yield(x.clone());
@@ -991,7 +1248,9 @@ impl<'a> BindingsBuilder<'a> {
                 self.ensure_expr(&mut x.value, usage);
                 let in_async_def = self.scopes.is_in_async_def();
                 let in_generator_element = self.in_generator_await_context();
-                if !in_async_def && !in_generator_element && !self.module_info.path().is_notebook()
+                if !in_async_def
+                    && !in_generator_element
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1032,7 +1291,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
         self.ensure_type_with_usage(
             x,
@@ -1043,23 +1302,54 @@ impl<'a> BindingsBuilder<'a> {
         );
     }
 
+    pub fn ensure_class_member_type(
+        &mut self,
+        x: &mut Expr,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
+    ) {
+        let written_range = x.range();
+        let mut usage = Usage::StaticTypeInformation {
+            is_annotation: true,
+        };
+        self.ensure_type_impl(
+            x,
+            tparams_builder.as_deref_mut(),
+            false,
+            false,
+            &mut usage,
+            true,
+        );
+        self.bind_shape_comment(x, written_range, tparams_builder, &mut usage);
+    }
+
     /// Like `ensure_type`, but with a specific usage context. Used by type alias
     /// construction sites to pass `Usage::TypeAliasRhs`.
     pub fn ensure_type_with_usage(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
         usage: &mut Usage,
     ) {
-        self.ensure_type_impl(x, tparams_builder, false, usage);
+        let written_range = x.range();
+        self.ensure_type_impl(
+            x,
+            tparams_builder.as_deref_mut(),
+            false,
+            false,
+            usage,
+            false,
+        );
+        self.bind_shape_comment(x, written_range, tparams_builder, usage);
     }
 
-    fn ensure_type_impl(
+    pub(super) fn ensure_type_impl(
         &mut self,
         x: &mut Expr,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
         in_string_literal: bool,
+        check_runtime_name: bool,
         usage: &mut Usage,
+        allow_proxy_method: bool,
     ) {
         fn as_forward_ref<'b>(
             literal: &'b ExprStringLiteral,
@@ -1071,10 +1361,28 @@ impl<'a> BindingsBuilder<'a> {
                 literal.as_single_part_string()
             }
         }
+        let expr_range = x.range();
+        let invalid_proxy_method_use = !allow_proxy_method
+            && matches!(usage, Usage::TypeAliasRhs)
+            && self.type_expr_is_proxy_method_node(x);
+        let allow_proxy_method = allow_proxy_method || invalid_proxy_method_use;
+        if invalid_proxy_method_use {
+            self.error(
+                expr_range,
+                ErrorKind::InvalidAnnotation,
+                "`ProxyMethod` is only valid as a direct class member annotation".to_owned(),
+            );
+        }
         match x {
             Expr::Name(x) => {
                 let name = Ast::expr_name_identifier(x.clone());
-                self.ensure_name(&name, usage, tparams_builder);
+                self.ensure_name_in_type(
+                    &name,
+                    usage,
+                    tparams_builder,
+                    check_runtime_name && !in_string_literal,
+                    self.allow_class_body_forward_reference_in_type(in_string_literal),
+                );
             }
             Expr::Subscript(ExprSubscript { value, .. })
                 if self.as_special_export(value) == Some(SpecialExport::Literal) =>
@@ -1088,51 +1396,121 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.as_special_export(value) == Some(SpecialExport::Annotated)
-                    && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
+                if self.as_special_export(value) == Some(SpecialExport::ProxyMethod) =>
             {
-                // Only go inside the first argument to Annotated, the rest are non-type metadata.
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                // We can't destructure a mutable Box in the guard, so force unwrapping it here
-                let tup = slice.as_tuple_expr_mut().unwrap();
-                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
-                for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(
-                        e,
-                        &mut Usage::StaticTypeInformation {
-                            is_annotation: false,
-                        },
-                    );
-                }
-            }
-            // Jaxtyping annotations: Float[Tensor, "batch channels"].
-            // The second argument is a shape string, not a forward reference.
-            Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.tensor_shapes()
-                    && matches!(&**value, Expr::Name(n) if self.scopes.is_imported_from_module(&n.id, "jaxtyping"))
-                    && matches!(&**slice, Expr::Tuple(tup) if tup.elts.len() == 2) =>
-            {
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                let tup = slice.as_tuple_expr_mut().unwrap();
-                self.ensure_type_impl(&mut tup.elts[0], tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    true,
+                );
                 self.ensure_expr(
-                    &mut tup.elts[1],
+                    &mut *slice,
                     &mut Usage::StaticTypeInformation {
                         is_annotation: false,
                     },
                 );
             }
-            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
-                self.ensure_type_impl(&mut *value, tparams_builder, in_string_literal, usage);
-                self.ensure_type_impl(&mut *slice, tparams_builder, in_string_literal, usage);
-            }
-            Expr::StringLiteral(literal)
-                if let Some(literal) = as_forward_ref(literal, in_string_literal) =>
+            Expr::Subscript(ExprSubscript {
+                value,
+                slice,
+                range,
+                ..
+            }) if let Some(special @ (SpecialExport::Annotated | SpecialExport::Shaped)) =
+                self.as_special_export(value)
+                && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
-                match Ast::parse_type_literal(literal) {
+                // Only go inside the first argument to `Annotated`. The rest are
+                // non-type metadata, except the string of a `Shaped`, which Pyrefly
+                // reads as a shape.
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    allow_proxy_method,
+                );
+                // We can't destructure a mutable Box in the guard, so force unwrapping it here
+                let tup = slice.as_tuple_expr_mut().unwrap();
+                self.ensure_type_impl(
+                    &mut tup.elts[0],
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    allow_proxy_method,
+                );
+                let bound_as_shape = special == SpecialExport::Shaped
+                    && self.bind_shape_string(*range, tup, tparams_builder, usage);
+                if !bound_as_shape {
+                    let allow_class_body_forward_reference =
+                        self.allow_class_body_forward_reference_in_type(in_string_literal);
+                    self.bind_annotated_metadata(
+                        &mut tup.elts[1..],
+                        allow_class_body_forward_reference,
+                    );
+                }
+            }
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.is_map_int_tuples(value) =>
+            {
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.bind_map_int_tuples_arguments(
+                    &mut *slice,
+                    tparams_builder,
+                    in_string_literal,
+                    usage,
+                );
+            }
+            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.ensure_type_impl(
+                    &mut *slice,
+                    tparams_builder,
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+            }
+            Expr::StringLiteral(expr_literal)
+                if let Some(literal) = as_forward_ref(expr_literal, in_string_literal) =>
+            {
+                if literal.flags.prefix().is_raw() {
+                    self.error(
+                        literal.range(),
+                        ErrorKind::InvalidAnnotation,
+                        "Raw string literals are not allowed in type expressions".to_owned(),
+                    );
+                }
+                match Ast::parse_type_literal(expr_literal, self.module_info.contents()) {
                     Ok(expr) => {
                         *x = expr;
-                        self.ensure_type_impl(x, tparams_builder, true, usage);
+                        self.ensure_type_impl(
+                            x,
+                            tparams_builder,
+                            true,
+                            check_runtime_name,
+                            usage,
+                            allow_proxy_method,
+                        );
                     }
                     Err(_) => {
                         // We don't need to emit errors here, because the solving logic expects the expression to resolve to a type, and it will fail.
@@ -1189,12 +1567,14 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Attribute(ExprAttribute { value, attr, .. })
-                if let Expr::Name(value) = &**value
+            Expr::Attribute(..)
+                if let Some((base, attrs)) = chase_static_attr_chain(x)
                 // We assume "args" and "kwargs" are ParamSpec attributes rather than imported TypeVars.
-                    && attr.id != "args" && attr.id != "kwargs" =>
+                    && attrs.last().id != "args"
+                    && attrs.last().id != "kwargs" =>
             {
-                // We intercept <name>.<name> to check if this is an imported legacy type parameter.
+                // We intercept dotted names (e.g. `mod.T` or `pkg.mod.T`) to check if the
+                // final attribute is an imported legacy type parameter.
                 //
                 // The value part of an attribute access is a module/object reference,
                 // not a type annotation. For example, in `x: pd.DataFrame`, `pd` is a
@@ -1208,8 +1588,8 @@ impl<'a> BindingsBuilder<'a> {
                     ref u => u.clone(),
                 };
                 self.ensure_simple_attr(
-                    &Ast::expr_name_identifier(value.clone()),
-                    attr,
+                    &Ast::expr_name_identifier(base),
+                    attrs,
                     &mut attr_value_usage,
                     tparams_builder,
                 );
@@ -1226,7 +1606,7 @@ impl<'a> BindingsBuilder<'a> {
                 let name = Ast::expr_name_identifier(name_expr.clone());
                 let id = LegacyTParamId::Name(name.clone());
                 let resolved = tparams_builder
-                    .as_mut()
+                    .as_deref_mut()
                     .and_then(|tb| self.try_intercept_lookup(tb, &id));
                 // Same as above: args/kwargs attribute values are not type references.
                 let mut attr_value_usage = match *usage {
@@ -1235,11 +1615,7 @@ impl<'a> BindingsBuilder<'a> {
                     },
                     ref u => u.clone(),
                 };
-                if resolved.is_some() {
-                    self.ensure_name(&name, &mut attr_value_usage, tparams_builder);
-                } else {
-                    self.ensure_name(&name, &mut attr_value_usage, &mut None);
-                }
+                self.ensure_name(&name, &mut attr_value_usage, resolved.and(tparams_builder));
             }
             Expr::BinOp(ExprBinOp {
                 left,
@@ -1254,8 +1630,22 @@ impl<'a> BindingsBuilder<'a> {
                 let right_is_forward_ref = matches!(&**right, Expr::StringLiteral(s) if as_forward_ref(s, in_string_literal).is_some());
 
                 // Recurse into children to handle string literal parsing
-                self.ensure_type_impl(left, tparams_builder, in_string_literal, usage);
-                self.ensure_type_impl(right, tparams_builder, in_string_literal, usage);
+                self.ensure_type_impl(
+                    left,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.ensure_type_impl(
+                    right,
+                    tparams_builder,
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    allow_proxy_method,
+                );
 
                 // Only create the check if we're in an executable file, at least one side
                 // is a forward ref, and we're not in Python 3.14+ or with future annotations
@@ -1278,8 +1668,27 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             _ => x.recurse_mut(&mut |x| {
-                self.ensure_type_impl(x, tparams_builder, in_string_literal, usage)
+                self.ensure_type_impl(
+                    x,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    check_runtime_name,
+                    usage,
+                    allow_proxy_method,
+                )
             }),
+        }
+    }
+
+    fn type_expr_is_proxy_method_node(&self, x: &Expr) -> bool {
+        match x {
+            Expr::Name(_) | Expr::Attribute(_) => {
+                self.as_special_export(x) == Some(SpecialExport::ProxyMethod)
+            }
+            Expr::Subscript(subscript) => {
+                self.as_special_export(&subscript.value) == Some(SpecialExport::ProxyMethod)
+            }
+            _ => false,
         }
     }
 
@@ -1287,7 +1696,7 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type_opt(
         &mut self,
         x: Option<&mut Expr>,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
         if let Some(x) = x {
             self.ensure_type(x, tparams_builder);
@@ -1296,15 +1705,19 @@ impl<'a> BindingsBuilder<'a> {
 
     pub fn ensure_and_bind_decorators(
         &mut self,
-        decorators: Vec<Decorator>,
+        decorators: ThinVec<Decorator>,
         usage: &mut Usage,
     ) -> Vec<Idx<KeyDecorator>> {
         let mut decorator_keys = Vec::with_capacity(decorators.len());
         for mut x in decorators {
             self.ensure_expr(&mut x.expression, usage);
+            let trailing_name = Ast::decorator_trailing_name(&x.expression).map(Name::new);
             let k = self.insert_binding(
                 KeyDecorator(x.range),
-                BindingDecorator { expr: x.expression },
+                BindingDecorator {
+                    expr: x.expression,
+                    trailing_name,
+                },
             );
             decorator_keys.push(k);
         }

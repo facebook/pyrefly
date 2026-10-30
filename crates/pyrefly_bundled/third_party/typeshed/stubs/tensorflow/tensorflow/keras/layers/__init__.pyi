@@ -1,7 +1,7 @@
 from _typeshed import Incomplete
 from collections.abc import Callable, Iterable, Sequence
-from typing import Any, Generic, Literal, TypeVar, overload, type_check_only
-from typing_extensions import Self, TypeAlias
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, overload, type_check_only
+from typing_extensions import Self
 
 import tensorflow as tf
 from tensorflow import Tensor, Variable
@@ -49,6 +49,7 @@ class Layer(tf.Module, Generic[_InputT_contra, _OutputT_co]):
     def trainable(self) -> bool: ...
     @trainable.setter
     def trainable(self, value: bool) -> None: ...
+
     def __init__(
         self,
         *,
@@ -73,10 +74,12 @@ class Layer(tf.Module, Generic[_InputT_contra, _OutputT_co]):
     # input_shape's real type depends on _InputT_contra, but we can't express that without HKT.
     # For example _InputT_contra tf.Tensor -> tf.TensorShape, _InputT_contra dict[str, tf.Tensor] -> dict[str, tf.TensorShape].
     def build(self, input_shape: Any, /) -> None: ...
+
     @overload
     def compute_output_shape(self: Layer[tf.Tensor, tf.Tensor], input_shape: tf.TensorShape, /) -> tf.TensorShape: ...
     @overload
     def compute_output_shape(self, input_shape: Any, /) -> Any: ...
+
     def add_weight(
         self,
         shape: Iterable[int | None] | None = None,
@@ -131,7 +134,7 @@ class _IndexLookup(Layer[tf.Tensor, tf.Tensor]):
         mask_token: str | None,
         oov_token: str,
         vocabulary_dtype: Literal["int64", "string"],
-        vocabulary: str | None | TensorCompatible = None,
+        vocabulary: str | TensorCompatible | None = None,
         idf_weights: TensorCompatible | None = None,
         invert: bool = False,
         output_mode: Literal["int", "count", "multi_hot", "one_hot", "tf_idf"] = "int",
@@ -159,7 +162,7 @@ class StringLookup(_IndexLookup):
         num_oov_indices: int = 1,
         mask_token: str | None = None,
         oov_token: str = "[UNK]",
-        vocabulary: str | None | TensorCompatible = None,
+        vocabulary: str | TensorCompatible | None = None,
         idf_weights: TensorCompatible | None = None,
         invert: bool = False,
         output_mode: Literal["int", "count", "multi_hot", "one_hot", "tf_idf"] = "int",
@@ -185,7 +188,7 @@ class IntegerLookup(_IndexLookup):
         num_oov_indices: int = 1,
         mask_token: int | None = None,
         oov_token: int = -1,
-        vocabulary: str | None | TensorCompatible = None,
+        vocabulary: str | TensorCompatible | None = None,
         vocabulary_dtype: Literal["int64"] = "int64",
         idf_weights: TensorCompatible | None = None,
         invert: bool = False,
@@ -313,7 +316,7 @@ class Conv2D(Layer[tf.Tensor, tf.Tensor]):
         kernel_size: int | Iterable[int],
         strides: int | Iterable[int] = (1, 1),
         padding: Literal["valid", "same"] = "valid",
-        data_format: None | Literal["channels_last", "channels_first"] = None,
+        data_format: Literal["channels_last", "channels_first"] | None = None,
         dilation_rate: int | Iterable[int] = (1, 1),
         groups: int = 1,
         activation: _Activation = None,
@@ -395,6 +398,7 @@ class MultiHeadAttention(Layer[Any, tf.Tensor]):
         autocast: bool = True,
         name: str | None = None,
     ) -> None: ...
+
     @overload  # type: ignore[override]
     def __call__(
         self,

@@ -925,10 +925,6 @@
                 "start": 5
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -957,10 +953,6 @@
                 "start": 143
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Optional"
@@ -973,10 +965,6 @@
                 "start": 19
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Optional"
@@ -1412,6 +1400,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "8f24e877367cad77ea2a10942e644b42"
+    "schema_id": "f329796272b9314200433ac342cbc15c"
   }
 ]

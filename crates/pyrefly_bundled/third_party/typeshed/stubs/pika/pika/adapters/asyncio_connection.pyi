@@ -1,56 +1,77 @@
-from asyncio import AbstractEventLoop
-from collections.abc import Callable
+import asyncio
+from _typeshed import Incomplete
+from collections.abc import Callable, Sequence
 from logging import Logger
 from typing_extensions import Self
 
-from ..connection import Parameters
-from .base_connection import BaseConnection
-from .utils import connection_workflow, io_services_utils, nbio_interface
+from pika.adapters.base_connection import BaseConnection
+from pika.adapters.utils import io_services_utils
+from pika.adapters.utils.connection_workflow import AbstractAMQPConnectionWorkflow, AMQPConnectorException
+from pika.adapters.utils.nbio_interface import (
+    AbstractFileDescriptorServices,
+    AbstractIOReference,
+    AbstractIOServices,
+    AbstractTimerReference,
+)
+from pika.connection import Parameters
 
 LOGGER: Logger
 
-class AsyncioConnection(BaseConnection):
+class AsyncioConnection(BaseConnection[asyncio.AbstractEventLoop]):
     def __init__(
         self,
         parameters: Parameters | None = None,
         on_open_callback: Callable[[Self], object] | None = None,
         on_open_error_callback: Callable[[Self, BaseException], object] | None = None,
         on_close_callback: Callable[[Self, BaseException], object] | None = None,
-        custom_ioloop: AbstractEventLoop | None = None,
+        custom_ioloop: asyncio.AbstractEventLoop | AbstractIOServices | None = None,
         internal_connection_workflow: bool = True,
     ) -> None: ...
     @classmethod
     def create_connection(
         cls,
-        connection_configs,
-        on_done,
-        custom_ioloop: AbstractEventLoop | None = None,
-        workflow: connection_workflow.AbstractAMQPConnectionWorkflow | None = None,
-    ): ...
+        connection_configs: Sequence[Parameters],
+        on_done: Callable[[Self | AMQPConnectorException], object],
+        custom_ioloop: asyncio.AbstractEventLoop | None = None,
+        workflow: AbstractAMQPConnectionWorkflow | None = None,
+    ) -> AbstractAMQPConnectionWorkflow: ...
 
 class _AsyncioIOServicesAdapter(
     io_services_utils.SocketConnectionMixin,
     io_services_utils.StreamingConnectionMixin,
-    nbio_interface.AbstractIOServices,
-    nbio_interface.AbstractFileDescriptorServices,
+    AbstractIOServices,
+    AbstractFileDescriptorServices,
 ):
-    def __init__(self, loop: AbstractEventLoop | None = None) -> None: ...
-    def get_native_ioloop(self): ...
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None: ...
+    def get_native_ioloop(self) -> asyncio.AbstractEventLoop: ...
     def close(self) -> None: ...
     def run(self) -> None: ...
     def stop(self) -> None: ...
-    def add_callback_threadsafe(self, callback) -> None: ...
-    def call_later(self, delay, callback): ...
-    def getaddrinfo(self, host, port, on_done, family: int = 0, socktype: int = 0, proto: int = 0, flags: int = 0): ...
-    def set_reader(self, fd, on_readable) -> None: ...
-    def remove_reader(self, fd): ...
-    def set_writer(self, fd, on_writable) -> None: ...
-    def remove_writer(self, fd): ...
+    def add_callback_threadsafe(self, callback: Callable[[], object]) -> None: ...
+    def call_later(self, delay: float, callback: Callable[[], object]) -> _TimerHandle: ...
+    def getaddrinfo(
+        self,
+        host: str | bytes | None,
+        port: str | bytes | int | None,
+        on_done: Callable[[BaseConnection[asyncio.AbstractEventLoop] | BaseException], object],  # type: ignore[override]
+        family: int = 0,
+        socktype: int = 0,
+        proto: int = 0,
+        flags: int = 0,
+    ) -> AbstractIOReference: ...
+    def set_reader(self, fd: int, on_readable: Callable[[], object]) -> None: ...
+    def remove_reader(self, fd: int) -> bool: ...
+    def set_writer(self, fd: int, on_writable: Callable[[], object]) -> None: ...
+    def remove_writer(self, fd: int) -> bool: ...
 
-class _TimerHandle(nbio_interface.AbstractTimerReference):
-    def __init__(self, handle) -> None: ...
+class _TimerHandle(AbstractTimerReference):
+    def __init__(self, handle: asyncio.Handle) -> None: ...
     def cancel(self) -> None: ...
 
-class _AsyncioIOReference(nbio_interface.AbstractIOReference):
-    def __init__(self, future, on_done) -> None: ...
-    def cancel(self): ...
+class _AsyncioIOReference(AbstractIOReference):
+    def __init__(
+        self,
+        future: asyncio.Future[Incomplete],
+        on_done: Callable[[BaseConnection[asyncio.AbstractEventLoop] | BaseException], object],
+    ) -> None: ...
+    def cancel(self) -> bool: ...

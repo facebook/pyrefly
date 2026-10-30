@@ -5,7 +5,9 @@ from typing import Final, overload
 from typing_extensions import Self
 
 from grpc import ServicerContext
-from grpc_health.v1 import health_pb2, health_pb2_grpc
+from grpc_health.v1 import _async, health_pb2, health_pb2_grpc
+
+aio = _async
 
 SERVICE_NAME: Final[str]
 OVERALL_HEALTH: Final[str]
@@ -23,6 +25,7 @@ class HealthServicer(health_pb2_grpc.HealthServicer):
         self, experimental_non_blocking: bool = True, experimental_thread_pool: futures.ThreadPoolExecutor | None = None
     ) -> None: ...
     def Check(self, request: health_pb2.HealthCheckRequest, context: ServicerContext) -> health_pb2.HealthCheckResponse: ...
+
     @overload
     def Watch(
         self, request: health_pb2.HealthCheckRequest, context: ServicerContext, send_response_callback: None = None
@@ -31,5 +34,6 @@ class HealthServicer(health_pb2_grpc.HealthServicer):
     def Watch(
         self, request: health_pb2.HealthCheckRequest, context: ServicerContext, send_response_callback: Callable[..., Incomplete]
     ) -> None: ...
-    def set(self, service: str, status: health_pb2.HealthCheckResponse.ServingStatus) -> None: ...
+
+    def set(self, service: str, status: int) -> None: ...
     def enter_graceful_shutdown(self) -> None: ...

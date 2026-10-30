@@ -113,7 +113,7 @@ impl TArgsCursor {
                     let Type::Tuple(Tuple::Unpacked(unpacked)) = *inner else {
                         unreachable!("guarded by matches! above")
                     };
-                    let (prefix, middle, suffix) = *unpacked;
+                    let (prefix, middle, suffix) = unpacked.into_parts();
                     expanded.extend(prefix);
                     expanded.push(Type::Unpack(Box::new(middle)));
                     expanded.extend(suffix);

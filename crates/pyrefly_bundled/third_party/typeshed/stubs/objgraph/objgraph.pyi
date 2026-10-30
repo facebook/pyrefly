@@ -2,8 +2,7 @@ from _typeshed import Incomplete, SupportsWrite
 from collections import defaultdict
 from collections.abc import Callable, Container, Iterable
 from types import ModuleType
-from typing import Final, Literal
-from typing_extensions import TypeAlias, TypeGuard
+from typing import Final, Literal, TypeAlias, TypeGuard
 
 IS_INTERACTIVE: bool
 
@@ -70,7 +69,7 @@ def show_backrefs(
     shortnames: bool = True,
     output: SupportsWrite[str] | None = None,
     extra_node_attrs: Callable[[object], dict[str, str]] | None = None,
-) -> None | _GraphvizSource: ...
+) -> _GraphvizSource | None: ...
 def show_refs(
     objs: object,
     max_depth: int = 3,
@@ -84,7 +83,7 @@ def show_refs(
     shortnames: bool = True,
     output: SupportsWrite[str] | None = None,
     extra_node_attrs: Callable[[object], dict[str, str]] | None = None,
-) -> None | _GraphvizSource: ...
+) -> _GraphvizSource | None: ...
 def show_chain(
     *chains: list[object], obj: object, predicate: _Filter, max_depth: int = 20, extra_ignore: Iterable[int] = ()
 ) -> None: ...

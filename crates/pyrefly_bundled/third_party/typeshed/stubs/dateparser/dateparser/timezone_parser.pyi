@@ -1,8 +1,7 @@
 import re
 from collections.abc import Generator
 from datetime import datetime, timedelta, tzinfo
-from pathlib import Path
-from typing import Final, TypeVar
+from typing import TypeVar
 
 _DateTimeT = TypeVar("_DateTimeT", bound=datetime)
 
@@ -16,11 +15,9 @@ class StaticTzInfo(tzinfo):
 
 def pop_tz_offset_from_string(date_string: str, as_offset: bool = True) -> tuple[str, StaticTzInfo | str | None]: ...
 def word_is_tz(word: str) -> bool: ...
+def is_timezone_token(token: str) -> bool: ...
 def convert_to_local_tz(datetime_obj: _DateTimeT, datetime_tz_offset: timedelta) -> _DateTimeT: ...
 def build_tz_offsets(search_regex_parts: list[str]) -> Generator[tuple[str, dict[str, re.Pattern[str] | timedelta]]]: ...
 def get_local_tz_offset() -> timedelta: ...
 
 local_tz_offset: timedelta
-
-CACHE_PATH: Final[Path]
-current_hash: int | None

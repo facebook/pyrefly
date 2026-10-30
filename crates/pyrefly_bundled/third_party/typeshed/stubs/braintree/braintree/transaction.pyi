@@ -40,6 +40,10 @@ from braintree.venmo_account import VenmoAccount
 from braintree.visa_checkout_card import VisaCheckoutCard
 
 class Transaction(Resource):
+    class AchType:
+        SameDay: Final = "same_day"
+        Standard: Final = "standard"
+
     class CreatedUsing:
         FullInformation: Final = "full_information"
         Token: Final = "token"
@@ -116,7 +120,7 @@ class Transaction(Resource):
     @staticmethod
     def update_details(transaction_id, params=None): ...
     @staticmethod
-    def void(transaction_id): ...
+    def void(transaction_id, params=None): ...
     @staticmethod
     def create(params): ...
     @staticmethod
@@ -141,6 +145,7 @@ class Transaction(Resource):
     tax_amount: Decimal | None
     discount_amount: Decimal | None
     shipping_amount: Decimal | None
+    surcharge_amount: Decimal | None
     billing_details: Address
     credit_card_details: CreditCard
     packages: list[PackageDetails]
@@ -179,6 +184,7 @@ class Transaction(Resource):
     payment_facilitator: PaymentFacilitator
     transfer: Transfer
     partially_authorized: bool
+    mastercard_transaction_link_id: str | None
     subscription_id: str
     created_at: datetime
     def __init__(self, gateway, attributes) -> None: ...
@@ -189,6 +195,6 @@ class Transaction(Resource):
     @property
     def vault_customer(self): ...
     @property
-    def is_disbursed(self): ...
+    def is_disbursed(self) -> bool: ...
     @property
     def line_items(self): ...

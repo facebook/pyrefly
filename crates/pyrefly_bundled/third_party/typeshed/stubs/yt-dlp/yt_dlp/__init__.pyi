@@ -1,5 +1,6 @@
 import optparse
-from collections.abc import Callable, Collection, Iterator, Mapping
+from _typeshed import Incomplete
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from typing import Any, Literal, NamedTuple, Protocol, TypedDict, type_check_only
 from typing_extensions import NotRequired
 
@@ -37,9 +38,7 @@ class _ExternalDownloader(TypedDict, total=False):
     ftp: str
     http: str
     m3u8: str
-    mms: str
     rtmp: str
-    rtsp: str
 
 @type_check_only
 class _DownloadRange(TypedDict):
@@ -64,7 +63,7 @@ _ProgressTemplate = TypedDict(
 )
 
 @type_check_only
-class _Params(TypedDict, total=False):
+class _YoutubeDLOptions(TypedDict, total=False):
     usenetrc: bool | None
     netrc_location: str | None
     netrc_cmd: str | None
@@ -105,7 +104,7 @@ class _Params(TypedDict, total=False):
     listformats: bool | None
     outtmpl: str | Mapping[str, str] | None
     outtmpl_na_placeholder: str | None
-    paths: str | None
+    paths: dict[str, str] | None
     restrictfilenames: bool | None
     windowsfilenames: bool | None
     ignoreerrors: bool | Literal["only_download"] | None
@@ -223,6 +222,7 @@ class _Params(TypedDict, total=False):
     write_pages: bool | None
     external_downloader_args: Literal["default"] | Mapping[str, Collection[str]] | Collection[str] | None
     postprocessor_args: Mapping[str, Collection[str]] | Collection[str] | None
+    postprocessor_hooks: Iterable[Callable[[dict[str, Any]], object]]
     geo_verification_proxy: str | None
     geo_bypass: bool | None
     geo_bypass_country: str | None
@@ -230,6 +230,7 @@ class _Params(TypedDict, total=False):
     useid: bool | None
     compat_opts: dict[str, Any] | None
     logger: _LoggerProtocol
+    post_hooks: Iterable[Callable[[Incomplete], object]]
     # Undocumented fields below.
     _deprecation_warnings: Collection[str] | None
     _warnings: Collection[str] | None
@@ -244,7 +245,7 @@ class _ParsedOptions(NamedTuple):
     parser: optparse.OptionParser
     options: optparse.Values
     urls: Collection[str]
-    ydl_opts: _Params
+    ydl_opts: _YoutubeDLOptions
 
 def parse_options(argv: Collection[str] | None = None) -> _ParsedOptions: ...
 def main(argv: list[str] | None = None) -> int: ...

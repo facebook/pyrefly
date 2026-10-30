@@ -1,8 +1,8 @@
 from _typeshed import Unused
 from collections.abc import Callable, Sequence
 from enum import Enum
-from typing import Any, Literal, NamedTuple, TypeVar, overload
-from typing_extensions import Self, TypeAlias, deprecated
+from typing import Any, Literal, NamedTuple, TypeAlias, TypeVar, overload
+from typing_extensions import LiteralString, Self, deprecated
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
@@ -10,6 +10,14 @@ from cryptography.hazmat.primitives.asymmetric.ed448 import Ed448PrivateKey as E
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey as Ed25519PrivateKey,
     Ed25519PublicKey as Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.asymmetric.mldsa import (
+    MLDSA44PrivateKey as MLDSA44PrivateKey,
+    MLDSA44PublicKey as MLDSA44PublicKey,
+    MLDSA65PrivateKey as MLDSA65PrivateKey,
+    MLDSA65PublicKey as MLDSA65PublicKey,
+    MLDSA87PrivateKey as MLDSA87PrivateKey,
+    MLDSA87PublicKey as MLDSA87PublicKey,
 )
 from cryptography.hazmat.primitives.asymmetric.x448 import X448PrivateKey as X448PrivateKey, X448PublicKey as X448PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import (
@@ -22,11 +30,11 @@ _T = TypeVar("_T")
 
 class UnimplementedOKPCurveKey:
     @classmethod
-    def generate(cls) -> None: ...
+    def generate(cls): ...
     @classmethod
-    def from_public_bytes(cls, *args) -> None: ...
+    def from_public_bytes(cls, *args): ...
     @classmethod
-    def from_private_bytes(cls, *args) -> None: ...
+    def from_private_bytes(cls, *args): ...
 
 ImplementedOkpCurves: Sequence[str]
 priv_bytes: Callable[[bytes], X25519PrivateKey] | None
@@ -47,6 +55,20 @@ class _X448_CURVE(NamedTuple):
     pubkey: UnimplementedOKPCurveKey
     privkey: UnimplementedOKPCurveKey
 
+class UnimplementedAKPAlgorithm:
+    @classmethod
+    def generate(cls): ...
+    @classmethod
+    def from_public_bytes(cls, *args): ...
+    @classmethod
+    def from_seed_bytes(cls, *args): ...
+
+ImplementedAKPAlgorithms: Sequence[str]
+
+class _AKPAlg(NamedTuple):
+    pubkey: UnimplementedAKPAlgorithm
+    privkey: UnimplementedAKPAlgorithm
+
 _JWKKeyTypeSupported: TypeAlias = Literal["oct", "RSA", "EC", "OKP"]
 JWKTypesRegistry: dict[_JWKKeyTypeSupported, str]
 
@@ -62,18 +84,19 @@ class JWKParameter(NamedTuple):
     required: bool | None
     type: ParmType | None
 
-JWKValuesRegistry: dict[str, dict[str, JWKParameter]]
-JWKParamsRegistry: dict[str, JWKParameter]
-JWKEllipticCurveRegistry: dict[str, str]
+JWKValuesRegistry: dict[LiteralString, dict[LiteralString, JWKParameter]]
+JWKParamsRegistry: dict[LiteralString, JWKParameter]
+JWKEllipticCurveRegistry: dict[LiteralString, str]
 _JWKUseSupported: TypeAlias = Literal["sig", "enc"]
 JWKUseRegistry: dict[_JWKUseSupported, str]
 _JWKOperationSupported: TypeAlias = Literal[
     "sign", "verify", "encrypt", "decrypt", "wrapKey", "unwrapKey", "deriveKey", "deriveBits"
 ]
 JWKOperationsRegistry: dict[_JWKOperationSupported, str]
-JWKpycaCurveMap: dict[str, str]
+JWKOpAndUsePairs: dict[_JWKOperationSupported, _JWKUseSupported]
+JWKpycaCurveMap: dict[LiteralString, LiteralString]
 IANANamedInformationHashAlgorithmRegistry: dict[
-    str,
+    LiteralString,
     hashes.SHA256
     | hashes.SHA384
     | hashes.SHA512
@@ -103,10 +126,26 @@ class InvalidJWKOperation(JWException):
 class InvalidJWKValue(JWException): ...
 
 class JWK(dict[str, Any]):
+    unsafe_skip_rsa_key_validation: bool
+
+    @overload
+    def __init__(
+        self,
+        *,
+        generate: Literal["RSA"],
+        public_exponent: int | None = None,
+        size: int | None = None,
+        kid: str | None = None,
+        alg: str | None = None,
+        use: _JWKUseSupported | None = None,
+        key_ops: list[_JWKOperationSupported] | None = None,
+    ) -> None: ...
+    @overload
+    def __init__(self, *, generate: Literal["oct", "EC", "OKP"], **kwargs) -> None: ...
+    @overload
     def __init__(self, **kwargs) -> None: ...
-    # `kty` and the other keyword arguments are passed as `params` to the called generator
-    # function. The possible arguments depend on the value of `kty`.
-    # TODO: Add overloads for the individual `kty` values.
+
+    # TODO: __init__ may not be typed adequately because keyword arguments depend on the value of generate
     @classmethod
     @overload
     def generate(
@@ -123,34 +162,40 @@ class JWK(dict[str, Any]):
     @classmethod
     @overload
     def generate(cls, *, kty: _JWKKeyTypeSupported, **kwargs) -> Self: ...
+
     def generate_key(self, *, kty: _JWKKeyTypeSupported, **kwargs) -> None: ...
     def import_key(self, **kwargs) -> None: ...
     @classmethod
     def from_json(cls, key) -> Self: ...
+
     @overload
     def export(self, private_key: bool = True, as_dict: Literal[False] = False) -> str: ...
     @overload
     def export(self, private_key: bool, as_dict: Literal[True]) -> dict[str, Any]: ...
     @overload
     def export(self, *, as_dict: Literal[True]) -> dict[str, Any]: ...
+
     @overload
     def export_public(self, as_dict: Literal[False] = False) -> str: ...
     @overload
     def export_public(self, as_dict: Literal[True]) -> dict[str, Any]: ...
     @overload
     def export_public(self, as_dict: bool = False) -> str | dict[str, Any]: ...
+
     @overload
     def export_private(self, as_dict: Literal[False] = False) -> str: ...
     @overload
     def export_private(self, as_dict: Literal[True]) -> dict[str, Any]: ...
     @overload
     def export_private(self, as_dict: bool = False) -> str | dict[str, Any]: ...
+
     @overload
     def export_symmetric(self, as_dict: Literal[False] = False) -> str: ...
     @overload
     def export_symmetric(self, as_dict: Literal[True]) -> dict[str, Any]: ...
     @overload
     def export_symmetric(self, as_dict: bool = False) -> str | dict[str, Any]: ...
+
     def public(self) -> Self: ...
     @property
     def has_public(self) -> bool: ...
@@ -202,10 +247,12 @@ class JWK(dict[str, Any]):
         ),
     ) -> None: ...
     def import_from_pem(self, data: bytes, password: bytes | None = None, kid: str | None = None) -> None: ...
+
     @overload
     def export_to_pem(self, private_key: Literal[False] = False, password: Unused = False) -> bytes: ...
     @overload
     def export_to_pem(self, private_key: Literal[True], password: bytes | None) -> bytes: ...
+
     @classmethod
     def from_pyca(
         cls,
@@ -229,19 +276,23 @@ class JWK(dict[str, Any]):
     @classmethod
     def from_password(cls, password: str) -> Self: ...
     def setdefault(self, key: str, default: _T | None = None) -> _T: ...
+    def __hash__(self) -> int: ...  # type: ignore[override]
 
 class JWKSet(dict[Literal["keys"], set[JWK]]):
     @overload
     def __setitem__(self, key: Literal["keys"], val: JWK) -> None: ...
     @overload
     def __setitem__(self, key: str, val: Any) -> None: ...
+
     def add(self, elem: JWK) -> None: ...
+
     @overload
     def export(self, private_keys: bool = True, as_dict: Literal[False] = False) -> str: ...
     @overload
     def export(self, private_keys: bool, as_dict: Literal[True]) -> dict[str, Any]: ...
     @overload
     def export(self, *, as_dict: Literal[True]) -> dict[str, Any]: ...
+
     def import_keyset(self, keyset: str | bytes) -> None: ...
     @classmethod
     def from_json(cls, keyset: str | bytes) -> Self: ...

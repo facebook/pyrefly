@@ -1,0 +1,63 @@
+{
+  "name": "test",
+  "path": "test.pyi",
+  "names": [
+    "test.Base.m",
+    "test.Base",
+    "test.Sub"
+  ],
+  "line_count": 10,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.Base.m",
+      "n_typable": 2,
+      "n_typed": 2,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 7,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Base",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 6,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.Sub",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 9,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 2,
+  "n_typed": 2,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 1,
+  "n_function_params": 0,
+  "n_method_params": 1,
+  "n_classes": 2,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

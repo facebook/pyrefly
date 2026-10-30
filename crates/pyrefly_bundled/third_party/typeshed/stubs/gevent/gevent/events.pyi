@@ -1,7 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
 from types import ModuleType
-from typing import Any, Protocol, TypeVar, type_check_only
-from typing_extensions import TypeAlias
+from typing import Any, Protocol, TypeAlias, TypeVar, type_check_only
 
 from gevent.hub import Hub
 from greenlet import greenlet as greenlet_t
@@ -126,7 +125,7 @@ class GeventDidPatchModuleEvent(GeventDidPatchEvent):
 class IGeventWillPatchAllEvent(IGeventWillPatchEvent):
     patch_all_arguments: Mapping[str, Any]
     patch_all_kwargs: Mapping[str, Any]
-    def will_patch_module(module_name: str) -> bool: ...
+    def will_patch_module(module_name: str) -> bool: ...  # pyrefly: ignore [invalid-annotation]
 
 class _PatchAllMixin:
     def __init__(self, patch_all_arguments: Mapping[str, Any], patch_all_kwargs: Mapping[str, Any]) -> None: ...

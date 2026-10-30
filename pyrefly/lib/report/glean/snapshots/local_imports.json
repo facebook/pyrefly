@@ -1,0 +1,2245 @@
+[
+  {
+    "facts": [],
+    "predicate": "gencode.GenCode.1"
+  },
+  {
+    "facts": [],
+    "predicate": "python.DeclarationDocstring.4"
+  },
+  {
+    "facts": [],
+    "predicate": "python.ImportStarLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": ""
+      }
+    ],
+    "predicate": "python.Name.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "call_args": [],
+          "callee_span": {
+            "length": 8,
+            "start": 161
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 11,
+                "start": 142
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 16,
+            "start": 138
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "call_args": [
+            {
+              "span": {
+                "length": 8,
+                "start": 161
+              }
+            }
+          ],
+          "callee_span": {
+            "length": 13,
+            "start": 157
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          }
+        }
+      }
+    ],
+    "predicate": "python.FileCall.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "len"
+          },
+          "caller": {
+            "id": 0,
+            "key": "local_imports.separators"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "len"
+          },
+          "caller": {
+            "id": 0,
+            "key": "local_imports.separators"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "callee": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.nested"
+          },
+          "caller": {
+            "id": 0,
+            "key": "local_imports.separators"
+          }
+        }
+      }
+    ],
+    "predicate": "python.CalleeToCaller.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.Config"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.Config.sep"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.nested"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os.path"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.path"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.s"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.Config"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.os"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "container": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          },
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.ContainingTopLevelDeclaration.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.Config"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 36,
+            "start": 172
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 159,
+            "start": 11
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "func": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.nested"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 37,
+            "start": 88
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.Config.sep"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 205
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.os"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 2,
+            "start": 7
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 2,
+            "start": 47
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os.path"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.path"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 7,
+            "start": 47
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "imp": {
+              "id": 0,
+              "key": {
+                "as_name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.s"
+                },
+                "from_name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 3,
+            "start": 74
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "declaration": {
+            "module": {
+              "id": 0,
+              "key": {
+                "name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 209,
+            "start": 0
+          }
+        }
+      }
+    ],
+    "predicate": "python.DeclarationLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "cls": {
+              "id": 0,
+              "key": {
+                "bases": [],
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "local_imports"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "local_imports.Config"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 36,
+            "start": 172
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "func": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "local_imports.separators"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "local_imports.separators.<locals>.nested"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "str"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "str"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 37,
+            "start": 88
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "func": {
+              "id": 0,
+              "key": {
+                "container": {
+                  "module": {
+                    "id": 0,
+                    "key": {
+                      "name": {
+                        "id": 0,
+                        "key": "local_imports"
+                      }
+                    }
+                  }
+                },
+                "declaration": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "local_imports.separators"
+                    }
+                  }
+                },
+                "is_async": false,
+                "kwonly_params": [],
+                "params": [],
+                "posonly_params": [],
+                "returnsInfo": {
+                  "displayType": {
+                    "id": 0,
+                    "key": "int"
+                  },
+                  "xrefs": [
+                    {
+                      "source": {
+                        "length": 3,
+                        "start": 0
+                      },
+                      "target": {
+                        "id": 0,
+                        "key": "int"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 159,
+            "start": 11
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "definition": {
+            "module": {
+              "id": 0,
+              "key": {
+                "module": {
+                  "id": 0,
+                  "key": {
+                    "name": {
+                      "id": 0,
+                      "key": "local_imports"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "span": {
+            "length": 209,
+            "start": 0
+          }
+        }
+      }
+    ],
+    "predicate": "python.DefinitionLocation.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "digest": {
+            "hash": "2e4cc5f0eb9df483730599ef7bb4b03b560744e96c8534f418448c5df664fb07",
+            "size": 209
+          },
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          }
+        }
+      }
+    ],
+    "predicate": "digest.FileDigest.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "endsInNewline": true,
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "hasUnicodeOrTabs": false,
+          "lengths": [
+            1,
+            1,
+            1,
+            1,
+            10,
+            14,
+            17,
+            19,
+            23,
+            25,
+            25,
+            28,
+            44
+          ]
+        }
+      }
+    ],
+    "predicate": "src.FileLines.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "language": 7
+        }
+      }
+    ],
+    "predicate": "src.FileLanguage.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 124
+            },
+            {
+              "length": 3,
+              "start": 150
+            },
+            {
+              "length": 3,
+              "start": 205
+            },
+            {
+              "length": 3,
+              "start": 74
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "posixpath.sep"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 124
+            },
+            {
+              "length": 3,
+              "start": 205
+            },
+            {
+              "length": 3,
+              "start": 74
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "os.sep"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 1,
+              "start": 124
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.s"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 2,
+              "start": 142
+            },
+            {
+              "length": 2,
+              "start": 195
+            },
+            {
+              "length": 2,
+              "start": 47
+            },
+            {
+              "length": 2,
+              "start": 64
+            },
+            {
+              "length": 2,
+              "start": 7
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "os"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 2,
+              "start": 142
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.os"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 104
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "str"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 138
+            },
+            {
+              "length": 3,
+              "start": 157
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "len"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 150
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.os.path.sep"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 150
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "os.path.sep"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 3,
+              "start": 31
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "int"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 145
+            },
+            {
+              "length": 4,
+              "start": 50
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "os.path"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 4,
+              "start": 145
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.os.path"
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "spans": [
+            {
+              "length": 6,
+              "start": 161
+            }
+          ],
+          "target": {
+            "id": 0,
+            "key": "local_imports.separators.<locals>.nested"
+          }
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByTarget.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "local_imports.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.s"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "posixpath.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 142
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "local_imports.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 142
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 195
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 47
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 64
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 7
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 104
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "str"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 138
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "len"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "local_imports.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os.path.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.path.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "posixpath.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 157
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "len"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 205
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 205
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "posixpath.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 31
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "int"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 74
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 74
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "posixpath.sep"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 145
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "local_imports.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.os.path"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 145
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.path"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 50
+              },
+              "target": {
+                "name": {
+                  "id": 0,
+                  "key": "os.path"
+                }
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 161
+              },
+              "target": {
+                "file": {
+                  "id": 0,
+                  "key": "local_imports.py"
+                },
+                "name": {
+                  "id": 0,
+                  "key": "local_imports.separators.<locals>.nested"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.xrefs.XRefsByFile.1"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "file": {
+            "id": 0,
+            "key": "local_imports.py"
+          },
+          "xrefs": [
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "id": 0,
+                "key": "local_imports.separators.<locals>.s"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "id": 0,
+                "key": "os.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 1,
+                "start": 124
+              },
+              "target": {
+                "id": 0,
+                "key": "posixpath.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 142
+              },
+              "target": {
+                "id": 0,
+                "key": "local_imports.separators.<locals>.os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 142
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 195
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 47
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 64
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 2,
+                "start": 7
+              },
+              "target": {
+                "id": 0,
+                "key": "os"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 104
+              },
+              "target": {
+                "id": 0,
+                "key": "str"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 138
+              },
+              "target": {
+                "id": 0,
+                "key": "len"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "id": 0,
+                "key": "local_imports.separators.<locals>.os.path.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "id": 0,
+                "key": "os.path.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 150
+              },
+              "target": {
+                "id": 0,
+                "key": "posixpath.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 157
+              },
+              "target": {
+                "id": 0,
+                "key": "len"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 205
+              },
+              "target": {
+                "id": 0,
+                "key": "os.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 205
+              },
+              "target": {
+                "id": 0,
+                "key": "posixpath.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 31
+              },
+              "target": {
+                "id": 0,
+                "key": "int"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 74
+              },
+              "target": {
+                "id": 0,
+                "key": "os.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 3,
+                "start": 74
+              },
+              "target": {
+                "id": 0,
+                "key": "posixpath.sep"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 145
+              },
+              "target": {
+                "id": 0,
+                "key": "local_imports.separators.<locals>.os.path"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 145
+              },
+              "target": {
+                "id": 0,
+                "key": "os.path"
+              }
+            },
+            {
+              "source": {
+                "length": 4,
+                "start": 50
+              },
+              "target": {
+                "id": 0,
+                "key": "os.path"
+              }
+            },
+            {
+              "source": {
+                "length": 6,
+                "start": 161
+              },
+              "target": {
+                "id": 0,
+                "key": "local_imports.separators.<locals>.nested"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "predicate": "python.XRefsViaNameByFile.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": ""
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": ""
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "local_imports"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.Config"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "Config"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.Config.sep"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "sep"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "Config"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "local_imports"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.os"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "os"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "separators"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "local_imports"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators.<locals>"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "<locals>"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "separators"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "local_imports"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators.<locals>.nested"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "nested"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "separators"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "local_imports"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators.<locals>.os"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "os"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "separators"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "local_imports"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators.<locals>.os.path"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "path"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "os"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "<locals>"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "separators"
+                        },
+                        "parent": {
+                          "id": 0,
+                          "key": {
+                            "local_name": {
+                              "id": 0,
+                              "key": "local_imports"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "local_imports.separators.<locals>.s"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "s"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "<locals>"
+                },
+                "parent": {
+                  "id": 0,
+                  "key": {
+                    "local_name": {
+                      "id": 0,
+                      "key": "separators"
+                    },
+                    "parent": {
+                      "id": 0,
+                      "key": {
+                        "local_name": {
+                          "id": 0,
+                          "key": "local_imports"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "os"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "os"
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "os.path"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "path"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "os.sep"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "sep"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "os"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 0,
+        "key": {
+          "id": 0,
+          "key": "posixpath.sep"
+        },
+        "value": {
+          "id": 0,
+          "key": {
+            "local_name": {
+              "id": 0,
+              "key": "sep"
+            },
+            "parent": {
+              "id": 0,
+              "key": {
+                "local_name": {
+                  "id": 0,
+                  "key": "posixpath"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "predicate": "python.NameToSName.4"
+  },
+  {
+    "facts": [
+      {
+        "id": 0,
+        "key": {
+          "name": {
+            "id": 0,
+            "key": "local_imports"
+          }
+        }
+      }
+    ],
+    "predicate": "python.Module.4"
+  },
+  {
+    "schema_id": "f329796272b9314200433ac342cbc15c"
+  }
+]

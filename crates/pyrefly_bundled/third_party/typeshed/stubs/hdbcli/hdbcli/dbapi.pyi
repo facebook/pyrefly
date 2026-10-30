@@ -3,8 +3,8 @@ from _typeshed import Incomplete, ReadableBuffer
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time
 from types import TracebackType
-from typing import Any, Final, Literal, overload
-from typing_extensions import Self, TypeAlias, disjoint_base
+from typing import Any, Final, Literal, TypeAlias, overload
+from typing_extensions import Self, disjoint_base
 
 from .resultrow import ResultRow
 
@@ -40,6 +40,7 @@ class Connection:
     def setautocommit(self, auto: bool = ...) -> None: ...
     def setclientinfo(self, key: str, value: str | None = ...) -> None: ...
     def ontrace(self, callback: Callable[[str], Any], options: str = ...) -> None: ...
+    def ping(self) -> bool: ...
 
 connect = Connection
 
@@ -85,10 +86,12 @@ class Cursor:
     def has_result_set(self) -> bool: ...
     def nextset(self) -> None: ...
     def parameter_description(self) -> tuple[str, ...]: ...
+
     @overload
     def prepare(self, operation: str, newcursor: Literal[True]) -> Cursor: ...
     @overload
     def prepare(self, operation: str, newcursor: Literal[False]) -> Any: ...
+
     def print_message(self): ...
     def parsenamedquery(self, *args, **kwargs): ...
     def scroll(self, value: int, mode: Literal["absolute", "relative"] = ...) -> None: ...
@@ -141,3 +144,50 @@ DATETIME: type[date | time | datetime]
 STRING = str
 BINARY = memoryview
 ROWID = int
+
+class AsyncConnection(Connection):
+    @classmethod
+    async def create(
+        cls,
+        address: str = "",
+        port: int = 0,
+        user: str = "",
+        password: str = "",
+        autocommit: bool = True,
+        packetsize: int | None = None,
+        userkey: str | None = ...,
+        *,
+        sessionvariables: dict[str, str] | None = ...,
+        forcebulkfetch: bool | None = ...,
+    ) -> Self: ...
+    async def cancel(self) -> bool: ...  # type: ignore[override]
+    async def close(self) -> None: ...  # type: ignore[override]
+    async def commit(self) -> None: ...  # type: ignore[override]
+    async def cursor(self) -> AsyncCursor: ...  # type: ignore[override]
+    async def rollback(self) -> None: ...  # type: ignore[override]
+
+class AsyncCursor(Cursor):
+    async def callproc(self, procname: str, parameters: tuple[Any, ...] = ..., overview: bool = ...) -> tuple[Any, ...]: ...  # type: ignore[override]
+    async def close(self) -> None: ...  # type: ignore[override]
+    async def execute(self, operation: str, parameters: tuple[Any, ...] | None = ...) -> bool: ...  # type: ignore[override]
+    async def executemany(self, operation: str, parameters: _Parameters = ..., batcherrors: bool = False) -> Any: ...
+    async def executemanyprepared(self, parameters: _Parameters = ...) -> Any: ...
+    async def executeprepared(self, parameters: _Parameters = ...) -> Any: ...
+    async def fetchone(self, uselob: bool = ...) -> ResultRow | None: ...  # type: ignore[override]
+    async def fetchall(self) -> list[ResultRow]: ...  # type: ignore[override]
+    async def fetchmany(self, size: int | None = ...) -> list[ResultRow]: ...  # type: ignore[override]
+    async def nextset(self) -> None: ...  # type: ignore[override]
+    async def prepare(self, operation: str, newcursor: bool = ...) -> Any: ...  # type: ignore[override]
+    async def scroll(self, value: int, mode: Literal["absolute", "relative"] = ...) -> None: ...  # type: ignore[override]
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(self, typ: type[BaseException] | None, val: BaseException | None, tb: TracebackType | None) -> None: ...
+
+class AsyncLob(LOB):
+    async def close(self) -> None: ...  # type: ignore[override]
+    async def find(self, object: str, length: int, position: int = ...) -> int: ...  # type: ignore[override]
+    async def read(self, size: int = ..., position: int = ...) -> str | bytes: ...  # type: ignore[override]
+    async def write(self, object: str | bytes) -> int: ...  # type: ignore[override]
+
+async_connect = AsyncConnection
+
+def set_async_mode(enabled: bool = True) -> None: ...

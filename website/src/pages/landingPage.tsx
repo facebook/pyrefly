@@ -15,6 +15,7 @@ import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
 import Banner from '../components/Banner';
+import { log, LoggingEvent } from '../utils/LoggingUtils';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
 export default function LandingPage(): React.ReactElement {
@@ -27,11 +28,16 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🎉 Pyrefly v1.0 is now available!"
+                text="📝 Help shape Pyrefly by taking our user survey!"
                 dismissible={true}
                 cta={{
-                    text: 'Read the blog',
-                    href: '/blog/v1.0',
+                    text: 'Take the survey',
+                    href: 'https://forms.gle/dx6GrzHX83sMjT6L9',
+                    external: true,
+                    onClick: () =>
+                        log(LoggingEvent.CLICK, {
+                            button_id: 'banner_user_survey',
+                        }),
                 }}
             />
             <LandingPageSection

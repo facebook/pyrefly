@@ -3,8 +3,8 @@ from _typeshed import Incomplete, Unused
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from functools import cached_property
 from json.decoder import JSONDecoder
-from typing import Any, ClassVar, Literal, TypedDict, TypeVar, overload, type_check_only
-from typing_extensions import Never, Required, TypeAlias, deprecated
+from typing import Any, ClassVar, Literal, TypeAlias, TypedDict, TypeVar, overload, type_check_only
+from typing_extensions import Never, Required, deprecated
 from urllib.request import Request, _DataType
 from xml.etree import ElementTree as ET
 
@@ -115,7 +115,7 @@ class _InfoDict(TypedDict, total=False):
     album_artist: Incomplete
     creator: str | None
 
-_StrNoDefaultOrNone: TypeAlias = str | None | type[NO_DEFAULT]
+_StrNoDefaultOrNone: TypeAlias = str | type[NO_DEFAULT] | None
 _T = TypeVar("_T")
 
 class InfoExtractor:
@@ -220,13 +220,15 @@ class InfoExtractor:
     def write_debug(self, msg: str, only_once: bool = False) -> None: ...
     # *args and **kwargs are passed to .params.get() where params is normally a mapping but is not required to be.
     def get_param(self, name: str, default: Any = None, *args: Any, **kwargs: Any) -> Any: ...
+
     @overload
     def report_drm(self, video_id: str, partial: type[NO_DEFAULT] = ...) -> None: ...
     @overload
     @deprecated("InfoExtractor.report_drm no longer accepts the argument partial")
     def report_drm(self, video_id: str, partial: bool) -> None: ...
+
     def report_extraction(self, id_or_name: str) -> None: ...
-    def report_download_webpage(self, video_id: str) -> None: ...
+    def report_download_webpage(self, video_id: str, *, note: str | None = None) -> None: ...
     def report_age_confirmation(self) -> None: ...
     def report_login(self) -> None: ...
     def raise_login_required(
@@ -238,12 +240,14 @@ class InfoExtractor:
     def raise_geo_restricted(
         self, msg: str = ..., countries: Collection[str] | None = None, metadata_available: bool = False
     ) -> None: ...
+
     @overload
     def raise_no_formats(
         self, msg: str | ExtractorError, expected: Literal[False] = False, video_id: str | None = None
     ) -> Never: ...
     @overload
     def raise_no_formats(self, msg: str | ExtractorError, expected: Literal[True], video_id: str | None = None) -> None: ...
+
     @staticmethod
     def url_result(
         url: str,
@@ -905,6 +909,8 @@ class InfoExtractor:
     def _cookies_passed(self) -> bool: ...
     def _mark_watched(self, *args: Any, **kwargs: Any) -> Any: ...  # Not implemented here.
     @staticmethod
+    def _generate_blockbuster_headers(*, min_headers: int = 2, max_headers: int = 8) -> dict[str, str]: ...
+    @staticmethod
     def _generic_id(url: str) -> str: ...
     def _generic_title(self, url: str = "", webpage: str = "", *, default: str | None = None) -> str | None: ...
     def _extract_chapters_helper(
@@ -939,7 +945,7 @@ class InfoExtractor:
         self,
         url: str,
         *args: Unused,
-        info_dict: _InfoDict = {},  # type: ignore[typeddict-item]  # pyright: ignore[reportArgumentType]
+        info_dict: _InfoDict = {},  # type: ignore[typeddict-item]  # pyright: ignore[reportArgumentType]  # ty:ignore[missing-typed-dict-key]  # pyrefly: ignore [bad-typed-dict-key]
         note: str = "Extracting generic embeds",
         **kwargs: Unused,
     ) -> list[dict[str, Any]]: ...

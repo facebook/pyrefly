@@ -37,7 +37,7 @@ matching process is explained in the next paragraph.
 3. Try to import from the fallback search path. See the [fallback search path section](#fallback-search-path) for
 more information on the contents of the search path.
 4. Try to import from the site package path. See the
-[site package path section](#site-package-path) for more information on the contents
+[site package path section](#site-packages-path) for more information on the contents
 of the site package path.
 5. Return an import error.
 
@@ -69,15 +69,18 @@ The import root is:
 
 ### Fallback Search Path
 
-The fallback search path is a heuristic automatically constructed by Pyrefly to attempt to
-find project files when there's no config file marking the project root, and Pyrefly
-is unable to determine from other heuristics where an import root might be.
+The fallback search path is a lower-precedence heuristic automatically constructed by
+Pyrefly when no Pyrefly config defines the project's import roots. For an inferred
+`src/` layout, it includes the project root so sibling directories such as `tests/`
+are importable without changing the primary `src/` import root. When Pyrefly cannot
+infer a project root, it instead searches the importing file's ancestors.
 It is only constructed when
 [`disable-search-path-heuristics`](configuration.mdx#disable-search-path-heuristics)
 is not set.
 
-The fallback search path consists of each directory from the directory containing
-a given file to the root of your filesystem. For example, if you have the following setup:
+For an unknown project root, the fallback search path consists of each directory from
+the directory containing a given file to the root of your filesystem. For example, if
+you have the following setup:
 
 ```
 /
@@ -103,14 +106,17 @@ a given file to the root of your filesystem. For example, if you have the follow
 - `c.py` could be importable with the paths `project_a.b.c` or `projects.project_a.b.c`
 - `d.py` could be importable with the paths `project_a.d` or `projects.project_a.d`
 
-### Site Package Path
+<span id="site-package-path" />
+
+### Site Packages Path
 
 The site package path
-([see `site-package-path` in configuration docs](configuration.mdx#site-package-path))
-consists of several entries representing third-party packages.
+([see `site-packages-path` in configuration docs](configuration.mdx#site-packages-path))
+contains roots from the configuration and the interpreter. Pyrefly uses these roots to
+resolve imports.
 
-1. Site package path from a config file (if no CLI override is present) or CLI args.
-2. A site package path queried from a Python interpreter, if one could be found.
+1. Site package paths from a config file (if no CLI override is present) or CLI args.
+2. Filtered entries from a Python interpreter's `sys.path`, if Pyrefly finds an interpreter.
    See [Environment Autoconfiguration](configuration.mdx#environment-autoconfiguration)
    for more information on finding interpreters.
 

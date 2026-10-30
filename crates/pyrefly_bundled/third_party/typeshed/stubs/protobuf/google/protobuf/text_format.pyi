@@ -1,13 +1,14 @@
 from _typeshed import SupportsWrite
 from collections.abc import Callable, Iterable
-from typing import Any, TypeVar
-from typing_extensions import TypeAlias
+from typing import Any, TypeAlias, TypeVar
 
 from .descriptor import FieldDescriptor
 from .descriptor_pool import DescriptorPool
 from .message import Message
 
 _M = TypeVar("_M", bound=Message)  # message type (of self)
+
+__all__ = ["MessageToString", "Parse", "PrintMessage", "PrintField", "PrintFieldValue", "Merge", "MessageToBytes"]
 
 class Error(Exception): ...
 
@@ -19,8 +20,8 @@ class ParseError(Error):
 class TextWriter:
     def __init__(self, as_utf8: bool) -> None: ...
     def write(self, val: str) -> int: ...
-    def getvalue(self) -> str: ...
     def close(self) -> None: ...
+    def getvalue(self) -> str: ...
 
 _MessageFormatter: TypeAlias = Callable[[Message, int, bool], str | None]
 
@@ -31,8 +32,6 @@ def MessageToString(
     use_short_repeated_primitives: bool = False,
     pointy_brackets: bool = False,
     use_index_order: bool = False,
-    float_format: str | None = None,
-    double_format: str | None = None,
     use_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     indent: int = 0,
@@ -49,8 +48,6 @@ def MessageToBytes(
     use_short_repeated_primitives: bool = False,
     pointy_brackets: bool = False,
     use_index_order: bool = False,
-    float_format: str | None = None,
-    double_format: str | None = None,
     use_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     indent: int = 0,
@@ -67,8 +64,6 @@ def PrintMessage(
     use_short_repeated_primitives: bool = False,
     pointy_brackets: bool = False,
     use_index_order: bool = False,
-    float_format: str | None = None,
-    double_format: str | None = None,
     use_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     message_formatter: _MessageFormatter | None = None,
@@ -85,8 +80,6 @@ def PrintField(
     use_short_repeated_primitives: bool = False,
     pointy_brackets: bool = False,
     use_index_order: bool = False,
-    float_format: str | None = None,
-    double_format: str | None = None,
     message_formatter: _MessageFormatter | None = None,
     print_unknown_fields: bool = False,
     force_colon: bool = False,
@@ -101,8 +94,6 @@ def PrintFieldValue(
     use_short_repeated_primitives: bool = False,
     pointy_brackets: bool = False,
     use_index_order: bool = False,
-    float_format: str | None = None,
-    double_format: str | None = None,
     message_formatter: _MessageFormatter | None = None,
     print_unknown_fields: bool = False,
     force_colon: bool = False,
@@ -116,8 +107,6 @@ class _Printer:
     use_short_repeated_primitives: bool
     pointy_brackets: bool
     use_index_order: bool
-    float_format: str | None
-    double_format: str | None
     use_field_number: bool
     descriptor_pool: DescriptorPool | None
     message_formatter: _MessageFormatter | None
@@ -132,8 +121,6 @@ class _Printer:
         use_short_repeated_primitives: bool = False,
         pointy_brackets: bool = False,
         use_index_order: bool = False,
-        float_format: str | None = None,
-        double_format: str | None = None,
         use_field_number: bool = False,
         descriptor_pool: DescriptorPool | None = None,
         message_formatter: _MessageFormatter | None = None,
@@ -151,6 +138,7 @@ def Parse(
     allow_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     allow_unknown_field: bool = False,
+    max_recursion_depth: int | None = None,
 ) -> _M: ...
 def Merge(
     text: str | bytes,
@@ -159,6 +147,7 @@ def Merge(
     allow_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     allow_unknown_field: bool = False,
+    max_recursion_depth: int | None = None,
 ) -> _M: ...
 def MergeLines(
     lines: Iterable[str | bytes],
@@ -167,6 +156,7 @@ def MergeLines(
     allow_field_number: bool = False,
     descriptor_pool: DescriptorPool | None = None,
     allow_unknown_field: bool = False,
+    max_recursion_depth: int | None = None,
 ) -> _M: ...
 
 class _Parser:
@@ -174,12 +164,15 @@ class _Parser:
     allow_field_number: bool
     descriptor_pool: DescriptorPool | None
     allow_unknown_field: bool
+    max_recursion_depth: int | None
+    recursion_depth: int
     def __init__(
         self,
         allow_unknown_extension: bool = False,
         allow_field_number: bool = False,
         descriptor_pool: DescriptorPool | None = None,
         allow_unknown_field: bool = False,
+        max_recursion_depth: int | None = None,
     ) -> None: ...
     def ParseLines(self, lines: Iterable[str | bytes], message: _M) -> _M: ...
     def MergeLines(self, lines: Iterable[str | bytes], message: _M) -> _M: ...
@@ -208,6 +201,8 @@ class Tokenizer:
     def ConsumeString(self) -> str: ...
     def ConsumeByteString(self) -> bytes: ...
     def ConsumeEnum(self, field: FieldDescriptor) -> int: ...
+    def ConsumeUrlChars(self) -> str: ...
+    def TryConsumeUrlChars(self) -> bool: ...
     def ParseErrorPreviousToken(self, message: Message) -> _ParseError: ...
     def ParseError(self, message: Message) -> _ParseError: ...
     def NextToken(self) -> None: ...

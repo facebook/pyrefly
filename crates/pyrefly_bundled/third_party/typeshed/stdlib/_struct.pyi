@@ -34,7 +34,7 @@ from collections.abc import Iterator
 from typing import Any
 from typing_extensions import disjoint_base
 
-def pack(fmt: str | bytes, /, *v: Any) -> bytes:
+def pack(format: str | bytes, /, *values: Any) -> bytes:
     """
     pack(format, v1, v2, ...) -> bytes
 
@@ -42,7 +42,7 @@ def pack(fmt: str | bytes, /, *v: Any) -> bytes:
     to the format string.  See help(struct) for more on format strings.
     """
     ...
-def pack_into(fmt: str | bytes, buffer: WriteableBuffer, offset: int, /, *v: Any) -> None:
+def pack_into(format: str | bytes, buffer: WriteableBuffer, offset: int, /, *values: Any) -> None:
     """
     pack_into(format, buffer, offset, v1, v2, ...)
 
@@ -83,6 +83,7 @@ def iter_unpack(format: str | bytes, buffer: ReadableBuffer, /) -> Iterator[tupl
 def calcsize(format: str | bytes, /) -> int:
     """Return size in bytes of the struct described by the format string."""
     ...
+
 @disjoint_base
 class Struct:
     """Struct(fmt) --> compiled struct object"""
@@ -95,7 +96,7 @@ class Struct:
         """struct size in bytes"""
         ...
     def __init__(self, format: str | bytes) -> None: ...
-    def pack(self, *v: Any) -> bytes:
+    def pack(self, *values: Any) -> bytes:
         """
         S.pack(v1, v2, ...) -> bytes
 
@@ -104,7 +105,7 @@ class Struct:
         strings.
         """
         ...
-    def pack_into(self, buffer: WriteableBuffer, offset: int, *v: Any) -> None:
+    def pack_into(self, buffer: WriteableBuffer, offset: int, /, *values: Any) -> None:
         """
         S.pack_into(buffer, offset, v1, v2, ...)
 

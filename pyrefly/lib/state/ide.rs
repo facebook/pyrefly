@@ -17,6 +17,7 @@ use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::gas::Gas;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
 use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -41,7 +42,23 @@ const KEY_TO_DEFINITION_INITIAL_GAS: Gas = Gas::new(100);
 pub enum IntermediateDefinition {
     Local(Export),
     NamedImport(TextRange, ModuleName, Name, Option<TextRange>),
-    Module(TextRange, ModuleName),
+    /// The flag records whether the module was bound to an explicit alias.
+    Module(TextRange, ModuleName, bool),
+}
+
+/// An edit that imports a single name into a module.
+///
+/// - `range` is a zero-length insertion point.
+/// - `insert_text` is the full import line to insert (`from m import x\n`).
+/// - `display_text` is the human-readable import (`from m import x`) for UI
+///   display.
+/// - `module_name` is the resolved module the name is imported from (the `m` in
+///   `from m import x`), used for UI labels like `(import m)`.
+pub(crate) struct ImportEdit {
+    pub range: TextRange,
+    pub insert_text: String,
+    pub display_text: String,
+    pub module_name: String,
 }
 
 pub fn key_to_intermediate_definition(
@@ -87,16 +104,22 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
             Binding::Forward(k)
             | Binding::PromoteForward(k)
             | Binding::ForwardToFirstUse(k)
-            | Binding::Narrow(k, _, _)
-            | Binding::LoopPhi(k, ..) => {
+            | Binding::Narrow(k, _, _) => {
                 current_idx = *k;
+            }
+            Binding::LoopPhi(phi) => current_idx = phi.0,
+            // A `Key::ModuleAlias` binding's `prev` leads back to the original
+            // `import foo as x`, one link per submodule import. Each link points to an earlier
+            // binding, so the chain can't loop and following it doesn't spend gas.
+            Binding::Module(x) if let (Key::ModuleAlias(..), Some(prev)) = (current_key, x.2) => {
+                gas.restore();
+                current_idx = prev;
             }
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
-                current_idx = binding.idx();
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
+                current_idx = bindings.get(*legacy_tparam).idx();
             }
             Binding::AssignToSubscript(x)
                 if let Some(key) = base_key_of_assign_target(&Expr::Subscript(x.0.clone())) =>
@@ -107,6 +130,9 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 if let Some(key) = base_key_of_assign_target(&Expr::Attribute(x.attr.clone())) =>
             {
                 current_idx = bindings.key_to_idx(&key);
+            }
+            Binding::OuterClassTypeParameter(k, _) => {
+                current_idx = *k;
             }
             _ => {
                 // We have reached the end of the forwarding chain, and did not find any definitions
@@ -131,9 +157,8 @@ fn create_intermediate_definition_from(
             Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) => {
                 current_binding = bindings.get(*k)
             }
-            Binding::PossibleLegacyTParam(k, _) => {
-                let binding = bindings.get(*k);
-                current_binding = bindings.get(binding.idx());
+            Binding::PossibleLegacyTParam(legacy_tparam, ..) => {
+                current_binding = bindings.get(bindings.get(*legacy_tparam).idx());
             }
             Binding::Import(x) => {
                 return Some(IntermediateDefinition::NamedImport(
@@ -158,10 +183,11 @@ fn create_intermediate_definition_from(
                 return Some(IntermediateDefinition::Module(
                     def_key.range(),
                     imported_module_name,
+                    matches!(def_key, Key::Definition(..)),
                 ));
             }
-            Binding::Function(idx, ..) => {
-                let func = bindings.get(*idx);
+            Binding::Function { decorated_idx, .. } => {
+                let func = bindings.get(*decorated_idx);
                 let undecorated = bindings.get(func.undecorated_idx);
                 let symbol_kind = if undecorated.class_key.is_some() {
                     SymbolKind::Method
@@ -221,9 +247,16 @@ fn create_intermediate_definition_from(
             // that is the binding the receiver semantics treat as the
             // canonical identity for future writes. (The refined RHS class
             // is still reachable by hovering or jumping from the RHS
-            // expression itself.)
+            // expression itself.) The same applies to receiver-bearing
+            // multi-target and unpacked rebinds.
             Binding::NameAssign(na) if let Some(receiver_idx) = na.receiver_idx => {
                 current_binding = bindings.get(receiver_idx);
+            }
+            Binding::MultiTargetAssign(_, _, _, Some(receiver)) => {
+                current_binding = bindings.get(receiver.idx);
+            }
+            Binding::UnpackedValue(value) if let Some(receiver) = &value.receiver => {
+                current_binding = bindings.get(receiver.idx);
             }
             _ => {
                 return Some(IntermediateDefinition::Local(Export {
@@ -240,14 +273,14 @@ fn create_intermediate_definition_from(
     None
 }
 
-pub fn insert_import_edit(
+pub(crate) fn insert_import_edit(
     ast: &ModModule,
     config_finder: &ConfigFinder,
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
     import_format: ImportFormat,
-) -> (TextSize, String, String) {
+) -> ImportEdit {
     let use_absolute_import = match import_format {
         ImportFormat::Absolute => true,
         ImportFormat::Relative => {
@@ -285,6 +318,26 @@ pub fn common_alias_target_module(alias: &str) -> Option<&'static str> {
     COMMON_MODULE_ALIASES.get(alias).copied()
 }
 
+/// Prepare an import edit after the module docstring and future-import header.
+pub(crate) fn prepare_import_insertion(
+    ast: &ModModule,
+    mut import_text: String,
+) -> (TextSize, String) {
+    if let Some(first_stmt) = ast.body.iter().find(|stmt| {
+        !is_docstring_stmt(stmt)
+            && !matches!(stmt, Stmt::ImportFrom(import)
+                if import.level == 0
+                    && import.module.as_ref().is_some_and(|module| module.id.as_str() == "__future__"))
+    }) {
+        return (first_stmt.range().start(), import_text);
+    }
+    // Appending after a header needs a line boundary, even without a final newline.
+    if !ast.range.is_empty() {
+        import_text.insert(0, '\n');
+    }
+    (ast.range.end(), import_text)
+}
+
 /// Insert `import <module>` (optionally with an alias) at the top of the file.
 /// Returns (position, import text, completion label).
 pub fn import_regular_import_edit(
@@ -292,11 +345,6 @@ pub fn import_regular_import_edit(
     handle_to_import_from: Handle,
     alias: Option<&str>,
 ) -> (TextSize, String, String) {
-    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    };
     let module_name_to_import = handle_to_import_from.module();
     let (import_text, completion_label) = match alias {
         Some(alias) => (
@@ -308,21 +356,17 @@ pub fn import_regular_import_edit(
             module_name_to_import.as_str().to_owned(),
         ),
     };
+    let (position, import_text) = prepare_import_insertion(ast, import_text);
     (position, import_text, completion_label)
 }
 
-pub fn insert_import_edit_with_forced_import_format(
+pub(crate) fn insert_import_edit_with_forced_import_format(
     ast: &ModModule,
     handle_to_insert_import: Handle,
     handle_to_import_from: Handle,
     export_name: &str,
     use_absolute_import: bool,
-) -> (TextSize, String, String) {
-    let position = if let Some(first_stmt) = ast.body.iter().find(|stmt| !is_docstring_stmt(stmt)) {
-        first_stmt.range().start()
-    } else {
-        ast.range.end()
-    };
+) -> ImportEdit {
     let module_name_to_import = if use_absolute_import {
         handle_to_import_from.module()
     } else if let Some(relative_module) = ModuleName::relative_module_name_between(
@@ -333,12 +377,17 @@ pub fn insert_import_edit_with_forced_import_format(
     } else {
         handle_to_import_from.module()
     };
-    let insert_text = format!(
-        "from {} import {}\n",
+    let display_text = format!(
+        "from {} import {export_name}",
         module_name_to_import.as_str(),
-        export_name
     );
-    (position, insert_text, module_name_to_import.to_string())
+    let (position, insert_text) = prepare_import_insertion(ast, format!("{display_text}\n"));
+    ImportEdit {
+        range: TextRange::at(position, TextSize::new(0)),
+        insert_text,
+        display_text,
+        module_name: module_name_to_import.to_string(),
+    }
 }
 
 /// Some handles must be imported in absolute style,

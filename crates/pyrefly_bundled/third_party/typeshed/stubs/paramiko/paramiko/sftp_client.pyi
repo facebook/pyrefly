@@ -1,8 +1,8 @@
 from _typeshed import StrOrBytesPath
 from collections.abc import Callable, Iterator
 from logging import Logger
-from typing import IO
-from typing_extensions import Self, TypeAlias
+from typing import IO, TypeAlias
+from typing_extensions import Self
 
 from paramiko.channel import Channel
 from paramiko.sftp import BaseSFTP
@@ -45,7 +45,7 @@ class SFTPClient(BaseSFTP, ClosingContextManager):
     def truncate(self, path: bytes | str, size: int) -> None: ...
     def readlink(self, path: bytes | str) -> str | None: ...
     def normalize(self, path: bytes | str) -> str: ...
-    def chdir(self, path: None | bytes | str = None) -> None: ...
+    def chdir(self, path: bytes | str | None = None) -> None: ...
     def getcwd(self) -> str | None: ...
     def putfo(
         self, fl: IO[bytes], remotepath: bytes | str, file_size: int = 0, callback: _Callback | None = None, confirm: bool = True

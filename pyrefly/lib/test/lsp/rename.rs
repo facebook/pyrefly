@@ -10,13 +10,17 @@ use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextSize;
 
+use crate::state::lsp::ReferenceOptions;
 use crate::state::state::State;
 use crate::test::util::code_frame_of_source_at_range;
 use crate::test::util::get_batched_lsp_operations_report;
 
 fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String {
     let transaction = state.transaction();
-    let ranges = transaction.find_local_references(handle, position, true);
+    // Mirror the reference-collection half of `textDocument/rename`: only ranges whose text
+    // is the symbol being renamed, since every returned range is rewritten in place.
+    let ranges =
+        transaction.find_local_references(handle, position, ReferenceOptions::textual_only(true));
     let module_info = transaction.get_module_info(handle).unwrap();
     format!(
         "Rename locations:\n{}",
@@ -25,6 +29,44 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
             .map(|range| code_frame_of_source_at_range(module_info.contents(), range))
             .join("\n")
     )
+}
+
+// BUG: prepare_rename returns None for __all__ and __slots__ entries.
+// It should return the range of foo or bar inside the quotes (issue #4344).
+#[test]
+fn prepare_rename_symbol_literals() {
+    let code = r#"
+foo = 1
+__all__ = ["foo"]
+#            ^
+
+class C:
+    __slots__ = ("bar",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.bar = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        format!(
+            "Rename range: {:?}",
+            state.transaction().prepare_rename(handle, position)
+        )
+    });
+    assert_eq!(
+        r#"
+# main.py
+3 | __all__ = ["foo"]
+                 ^
+Rename range: None
+
+7 |     __slots__ = ("bar",)
+                       ^
+Rename range: None
+"#
+        .trim(),
+        report.trim(),
+    );
 }
 
 #[test]
@@ -135,6 +177,98 @@ Rename locations:
                                        ^^^^
 11 |     result3 = greet(name="Charlie", message="Hey")
                          ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// Find-references reports `Foo()` as a reference to `Foo.__init__`, but that range spells the
+/// class name. Rename must skip it, or renaming `__init__` would rewrite the constructor call.
+#[test]
+fn test_rename_dunder_init_skips_constructor_call_sites() {
+    let code = r#"
+class Foo:
+    def __init__(self): ...
+    #   ^
+
+Foo()
+Foo().__init__()
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     def __init__(self): ...
+            ^
+Rename locations:
+3 |     def __init__(self): ...
+            ^^^^^^^^
+7 | Foo().__init__()
+          ^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn test_rename_legacy_type_parameters_updates_constructor_names() {
+    let code = r#"
+from typing import Callable, ParamSpec, TypeVar, TypeVarTuple
+
+T = TypeVar("T")
+P = ParamSpec(name="P")
+Ts = TypeVarTuple("Ts")
+unrelated = "T"
+
+def f(value: T) -> T:
+#            ^
+    return value
+
+def g(func: Callable[P, None]) -> None:
+#                    ^
+    pass
+
+def h(value: tuple[*Ts]) -> None:
+#                   ^
+    pass
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | def f(value: T) -> T:
+                 ^
+Rename locations:
+4 | T = TypeVar("T")
+    ^
+4 | T = TypeVar("T")
+                 ^
+9 | def f(value: T) -> T:
+                 ^
+9 | def f(value: T) -> T:
+                       ^
+
+13 | def g(func: Callable[P, None]) -> None:
+                          ^
+Rename locations:
+5 | P = ParamSpec(name="P")
+    ^
+5 | P = ParamSpec(name="P")
+                        ^
+13 | def g(func: Callable[P, None]) -> None:
+                          ^
+
+17 | def h(value: tuple[*Ts]) -> None:
+                         ^
+Rename locations:
+6 | Ts = TypeVarTuple("Ts")
+    ^^
+6 | Ts = TypeVarTuple("Ts")
+                       ^^
+17 | def h(value: tuple[*Ts]) -> None:
+                         ^^
 "#
         .trim(),
         report.trim(),

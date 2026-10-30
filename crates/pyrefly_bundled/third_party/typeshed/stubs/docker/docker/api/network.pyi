@@ -1,6 +1,6 @@
+from _typeshed import Incomplete
 from collections.abc import Iterable
-from typing import Any, Literal, TypedDict, type_check_only
-from typing_extensions import TypeAlias
+from typing import Any, Literal, TypeAlias, TypedDict, type_check_only
 
 from docker.types import IPAMConfig
 
@@ -16,7 +16,7 @@ _Network: TypeAlias = _HasId | _HasID | str
 _Container: TypeAlias = _HasId | _HasID | str
 
 class NetworkApiMixin:
-    def networks(self, names=None, ids=None, filters=None): ...
+    def networks(self, names: list[Incomplete] | None = None, ids: list[Incomplete] | None = None, filters=None): ...
     def create_network(
         self,
         name: str,

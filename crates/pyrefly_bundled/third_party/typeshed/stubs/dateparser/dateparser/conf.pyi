@@ -1,7 +1,7 @@
 import datetime
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar
-from typing_extensions import ParamSpec, Self
+from typing import Any, Literal, ParamSpec, TypeVar
+from typing_extensions import Self
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -9,7 +9,7 @@ _R = TypeVar("_R")
 class Settings:
     # Next attributes are optional and may be missing.
     # Please keep in sync with _Settings TypedDict
-    DATE_ORDER: str
+    DATE_ORDER: Literal["DMY", "DYM", "MDY", "MYD", "YDM", "YMD"]
     PREFER_LOCALE_DATE_ORDER: bool
     TIMEZONE: str
     TO_TIMEZONE: str
@@ -20,6 +20,7 @@ class Settings:
     RELATIVE_BASE: datetime.datetime
     STRICT_PARSING: bool
     REQUIRE_PARTS: list[Literal["day", "month", "year"]]
+    IGNORE_SURROUNDING_TEXT: bool
     SKIP_TOKENS: list[str]
     NORMALIZE: bool
     RETURN_TIME_AS_PERIOD: bool

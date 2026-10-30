@@ -10,23 +10,26 @@ is_py35: Final = True
 is_py36: Final = True
 is_py37: Final = True
 is_py38: Final = True
-is_py39: Final[bool]
-is_py310: Final[bool]
+is_py39: Final = True
+is_py310: Final = True
 is_py311: Final[bool]
 is_py312: Final[bool]
 is_py313: Final[bool]
 is_py314: Final[bool]
+is_py315: Final[bool]
 is_win: Final[bool]
 is_win_10: Final[bool]
 is_win_11: Final[bool]
 is_win_wine: Final[bool]
 is_cygwin: Final[bool]
 is_darwin: Final[bool]
+is_android: Final[bool]
 is_linux: Final[bool]
 is_solar: Final[bool]
 is_aix: Final[bool]
 is_freebsd: Final[bool]
 is_openbsd: Final[bool]
+is_netbsd: Final[bool]
 is_hpux: Final[bool]
 is_unix: Final[bool]
 is_musl: Final[bool]
@@ -53,10 +56,12 @@ machine: Final[
 ]
 
 def is_wine_dll(filename: FileDescriptorOrPath) -> bool: ...
+
 @overload
 def getenv(name: str, default: str) -> str: ...
 @overload
 def getenv(name: str, default: None = None) -> str | None: ...
+
 def setenv(name: str, value: str) -> None: ...
 def unsetenv(name: str) -> None: ...
 def exec_command(

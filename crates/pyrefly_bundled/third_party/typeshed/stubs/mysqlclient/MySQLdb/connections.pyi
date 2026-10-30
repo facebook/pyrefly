@@ -1,8 +1,8 @@
 from _typeshed import Incomplete
 from re import Pattern
 from types import TracebackType
-from typing import Any
-from typing_extensions import LiteralString, Self, TypeAlias
+from typing import Any, Literal, TypeAlias
+from typing_extensions import LiteralString, Self
 
 from . import _mysql, cursors
 from ._exceptions import (
@@ -29,11 +29,12 @@ def numeric_part(s): ...
 
 class Connection(_mysql.connection):
     default_cursor: type[cursors.Cursor]
+    executemany_fallback: Literal["loop", "multi"]
     cursorclass: type[cursors.BaseCursor]
     encoders: Incomplete
     encoding: str
     messages: Incomplete
-    def __init__(self, *args, **kwargs) -> None: ...
+    def __init__(self, *args, executemany_fallback: Literal["loop", "multi"] = ..., **kwargs) -> None: ...
     def __enter__(self) -> Self: ...
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None

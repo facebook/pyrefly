@@ -21,6 +21,7 @@ use ruff_text_size::TextSize;
 
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::IdentifierContext;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::reference_in_disallowed_scope;
@@ -52,7 +53,11 @@ pub(crate) fn inline_variable_code_actions(
     ) {
         return None;
     }
-    let references = transaction.find_local_references(handle, def.definition_range.start(), true);
+    let references = transaction.find_local_references(
+        handle,
+        def.definition_range.start(),
+        ReferenceOptions::textual_only(true),
+    );
     if references.is_empty() {
         return None;
     }
@@ -82,13 +87,18 @@ pub(crate) fn inline_variable_code_actions(
     if value_text.contains('\n') {
         return None;
     }
-    let replacement = format!("({value_text})");
     let mut edits = Vec::new();
     for range in references {
         if range == def.definition_range {
             continue;
         }
-        edits.push((module_info.dupe(), range, replacement.clone()));
+        let parent = Ast::parent_node(ast.as_ref(), range);
+        let replacement = if Ast::needs_brackets(parent, value_expr) {
+            format!("({value_text})")
+        } else {
+            value_text.to_owned()
+        };
+        edits.push((module_info.dupe(), range, replacement));
     }
     if edits.is_empty() {
         return None;
@@ -98,7 +108,7 @@ pub(crate) fn inline_variable_code_actions(
     Some(vec![LocalRefactorCodeAction {
         title: format!("Inline variable `{}`", identifier.identifier.id),
         edits,
-        kind: CodeActionKind::REFACTOR_INLINE,
+        kind: CodeActionKind::RefactorInline,
     }])
 }
 
@@ -224,45 +234,79 @@ fn collect_nested_scopes(stmts: &[Stmt], scope_range: TextRange, ranges: &mut Ve
     }
 }
 
-/// Expands a statement range to include surrounding whitespace and newlines for clean removal.
+/// Expands a statement range to include surrounding separators and newlines for clean removal.
 ///
-/// When removing a statement, we want to delete the entire line if the statement is alone on it,
-/// including leading indentation and the trailing newline. This prevents leaving behind blank
-/// lines or orphaned whitespace after the removal.
-///
-/// The function handles three cases:
-/// 1. Statement alone on a line: expands to include leading whitespace and trailing newline
-/// 2. Statement at end of file with no trailing newline: expands backward to consume preceding whitespace
-/// 3. Statement with other content on the same line: returns the original range unchanged
+/// A statement alone on its line consumes the whole line. For semicolon-separated statements, the
+/// separator on the side that preserves the remaining statements is consumed with the statement.
+/// Other same-line content leaves the original range unchanged.
 fn expand_statement_removal_range(source: &str, stmt_range: TextRange) -> TextRange {
-    let mut start = stmt_range.start().to_usize();
-    let mut end = stmt_range.end().to_usize();
+    let start = stmt_range.start().to_usize();
+    let end = stmt_range.end().to_usize();
     let bytes = source.as_bytes();
-    if start <= source.len() {
-        let line_start = source[..start].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
-        if source[line_start..start]
-            .chars()
-            .all(|ch| ch == ' ' || ch == '\t')
-        {
-            start = line_start;
-        }
+    let line_start = source[..start]
+        .rfind(['\r', '\n'])
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let mut line_end = end;
+    while line_end < bytes.len() && !matches!(bytes[line_end], b'\r' | b'\n') {
+        line_end += 1;
     }
-    if end < bytes.len() {
-        if bytes[end] == b'\r' && end + 1 < bytes.len() && bytes[end + 1] == b'\n' {
-            end += 2;
-        } else if bytes[end] == b'\n' || bytes[end] == b'\r' {
-            end += 1;
-        }
+    let newline_end = if line_end < bytes.len()
+        && bytes[line_end] == b'\r'
+        && line_end + 1 < bytes.len()
+        && bytes[line_end + 1] == b'\n'
+    {
+        line_end + 2
+    } else if line_end < bytes.len() {
+        line_end + 1
+    } else {
+        line_end
+    };
+
+    let mut after = end;
+    while after < line_end && matches!(bytes[after], b' ' | b'\t') {
+        after += 1;
     }
-    if end == stmt_range.end().to_usize() {
-        while start > 0 && bytes[start - 1].is_ascii_whitespace() && bytes[start - 1] != b'\n' {
-            start -= 1;
+    let trailing_separator_end = if after < line_end && bytes[after] == b';' {
+        let mut next = after + 1;
+        while next < line_end && matches!(bytes[next], b' ' | b'\t') {
+            next += 1;
         }
-        if start > 0 && bytes[start - 1] == b'\n' {
-            start -= 1;
+        if next < line_end && bytes[next] != b'#' {
+            return TextRange::new(
+                stmt_range.start(),
+                TextSize::try_from(next).expect("source offsets fit in TextSize"),
+            );
         }
+        Some(next)
+    } else {
+        None
+    };
+
+    let starts_line = bytes[line_start..start]
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t'));
+    if starts_line {
+        if after == line_end || bytes[after] == b'#' || trailing_separator_end.is_some() {
+            return TextRange::new(
+                TextSize::try_from(line_start).expect("source offsets fit in TextSize"),
+                TextSize::try_from(newline_end).expect("source offsets fit in TextSize"),
+            );
+        }
+        return stmt_range;
     }
-    let start = TextSize::try_from(start).unwrap_or(stmt_range.start());
-    let end = TextSize::try_from(end).unwrap_or(stmt_range.end());
-    TextRange::new(start, end)
+
+    let mut before = start;
+    while before > line_start && matches!(bytes[before - 1], b' ' | b'\t') {
+        before -= 1;
+    }
+    if before > line_start && bytes[before - 1] == b';' {
+        return TextRange::new(
+            TextSize::try_from(before - 1).expect("source offsets fit in TextSize"),
+            TextSize::try_from(trailing_separator_end.unwrap_or(end))
+                .expect("source offsets fit in TextSize"),
+        );
+    }
+
+    stmt_range
 }

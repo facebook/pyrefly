@@ -58,16 +58,15 @@ pub enum SpecialForm {
 
 impl SpecialForm {
     pub fn new(name: &Name, annotation: &Expr) -> Option<Self> {
-        if name.as_str() == "Generic" {
-            if let Expr::Subscript(ExprSubscript { value, slice, .. }) = annotation
-                && let Expr::Name(x) = &**value
-                && let Expr::Name(y) = &**slice
-                && x.id == "type"
-                && y.id == "_Generic"
-            {
-                return Some(SpecialForm::Generic);
+        let declares_special_form = match annotation {
+            Expr::Name(x) => x.id == "_SpecialForm",
+            Expr::Subscript(ExprSubscript { value, slice, .. }) => {
+                matches!(&**value, Expr::Name(x) if x.id == "type")
+                    && matches!(&**slice, Expr::Name(y) if y.id.strip_prefix('_') == Some(name.as_str()))
             }
-        } else if !matches!(annotation, Expr::Name(x) if x.id == "_SpecialForm") {
+            _ => false,
+        };
+        if !declares_special_form {
             return None;
         }
         SpecialForm::from_str(name.as_str()).ok()

@@ -1,7 +1,6 @@
 import io
 from _typeshed import Incomplete, StrPath
-from typing import Final
-from typing_extensions import TypeAlias
+from typing import Final, TypeAlias
 
 from .cffi_opcode import *
 from .error import VerificationError as VerificationError
@@ -9,7 +8,8 @@ from .error import VerificationError as VerificationError
 VERSION_BASE: Final = 9729
 VERSION_EMBEDDED: Final = 9985
 VERSION_CHAR16CHAR32: Final = 10241
-USE_LIMITED_API: Final = True
+FREE_THREADED_BUILD: Final[int | None]
+USE_LIMITED_API: Final[bool]
 
 class GlobalExpr:
     name: Incomplete

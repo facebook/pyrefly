@@ -24,6 +24,10 @@ const COMPONENTS_TO_ANIMATE = [
     // Why Pyrefly sections
     'WhyPyrefly',
     'WhyPyreflyGridItem',
+    // IDE Carousel section
+    'IDECarousel',
+    // AI Confidence section
+    'AIConfidence',
     // Performance comparison section
     'PerformanceComparisonChartSectionTitle',
     'PerformanceComparisonChartSection',
@@ -41,7 +45,7 @@ type DelayedComponentName = (typeof COMPONENTS_TO_ANIMATE)[number];
  * Record of components that have more than one child and need to be handled differently
  */
 const componentsWithMoreThanOneChild: Record<DelayedComponentName, number> = {
-    'WhyPyreflyGridItem': 3,
+    'WhyPyreflyGridItem': 4,
 };
 
 const ANIMATION_DELAY_BETWEEN_COMPONENTS_SECONDS = 0.15;

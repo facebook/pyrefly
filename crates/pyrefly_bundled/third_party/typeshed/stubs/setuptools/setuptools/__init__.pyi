@@ -155,7 +155,7 @@ def setup(
     install_requires: str | Iterable[str] = [],
     extras_require: _DictLike[Incomplete, Incomplete] = {},
     # kwargs used directly in distutils.core.setup
-    distclass: type[_DistributionT] = Distribution,  # type: ignore[assignment] # noqa: Y011
+    distclass: type[_DistributionT] = Distribution,  # type: ignore[assignment] # noqa: Y011  # ty:ignore[invalid-parameter-default]
     # Custom Distributions could accept more params
     **attrs: Any,
 ) -> _DistributionT: ...
@@ -166,6 +166,7 @@ class Command(_Command):
     dry_run: bool
     # Any: Dynamic command subclass attributes
     def __init__(self, dist: Distribution, **kw: Any) -> None: ...
+
     # Note: Commands that setuptools doesn't re-expose are considered deprecated (they must be imported from distutils directly)
     # So we're not listing them here. This list comes directly from the setuptools/command folder. Minus the test command.
     @overload  # type: ignore[override]
@@ -214,6 +215,7 @@ class Command(_Command):
     def get_finalized_command(self, command: Literal["setopt"], create: bool | Literal[0, 1] = 1) -> setopt: ...
     @overload
     def get_finalized_command(self, command: str, create: bool | Literal[0, 1] = 1) -> Command: ...
+
     @overload  # type: ignore[override] # Extra **kw param
     def reinitialize_command(self, command: Literal["alias"], reinit_subcommands: bool = False, **kw) -> alias: ...
     @overload
@@ -266,6 +268,7 @@ class Command(_Command):
     def reinitialize_command(self, command: str, reinit_subcommands: bool = False, **kw) -> Command: ...
     @overload
     def reinitialize_command(self, command: _CommandT, reinit_subcommands: bool = False, **kw) -> _CommandT: ...
+
     @abstractmethod
     def initialize_options(self) -> None: ...
     @abstractmethod

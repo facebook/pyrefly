@@ -1639,10 +1639,6 @@
                 "start": 203
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "int"
@@ -1655,10 +1651,6 @@
                 "start": 114
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "list"
@@ -1671,10 +1663,6 @@
                 "start": 126
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "builtins.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "bool"
@@ -1703,10 +1691,6 @@
                 "start": 198
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.List"
@@ -1735,10 +1719,6 @@
                 "start": 108
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Union"
@@ -1763,10 +1743,6 @@
                 "start": 19
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing.Union"
@@ -1795,10 +1771,6 @@
                 "start": 191
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -1811,10 +1783,6 @@
                 "start": 32
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -1827,10 +1795,6 @@
                 "start": 5
               },
               "target": {
-                "file": {
-                  "id": 0,
-                  "key": "typing.pyi"
-                },
                 "name": {
                   "id": 0,
                   "key": "typing"
@@ -2603,6 +2567,6 @@
     "predicate": "python.Module.4"
   },
   {
-    "schema_id": "8f24e877367cad77ea2a10942e644b42"
+    "schema_id": "f329796272b9314200433ac342cbc15c"
   }
 ]

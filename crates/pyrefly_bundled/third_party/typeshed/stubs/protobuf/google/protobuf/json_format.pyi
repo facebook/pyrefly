@@ -6,8 +6,9 @@ from google.protobuf.message import Message
 _MessageT = TypeVar("_MessageT", bound=Message)
 
 class Error(Exception): ...
-class ParseError(Error): ...
 class SerializeToJsonError(Error): ...
+class ParseError(Error): ...
+class EnumStringValueParseError(ParseError): ...
 
 def MessageToJson(
     message: Message,
@@ -16,9 +17,10 @@ def MessageToJson(
     sort_keys: bool = False,
     use_integers_for_enums: bool = False,
     descriptor_pool: DescriptorPool | None = None,
-    float_precision: int | None = None,
     ensure_ascii: bool = True,
     always_print_fields_with_no_presence: bool = False,
+    *,
+    unquote_int64_if_possible: bool = False,
 ) -> str: ...
 def MessageToDict(
     message: Message,
@@ -26,7 +28,8 @@ def MessageToDict(
     preserving_proto_field_name: bool = False,
     use_integers_for_enums: bool = False,
     descriptor_pool: DescriptorPool | None = None,
-    float_precision: int | None = None,
+    *,
+    unquote_int64_if_possible: bool = False,
 ) -> dict[str, Any]: ...
 def Parse(
     text: bytes | str,
@@ -36,7 +39,7 @@ def Parse(
     max_recursion_depth: int = 100,
 ) -> _MessageT: ...
 def ParseDict(
-    js_dict: Any,
+    js_dict: dict[str, Any],
     message: _MessageT,
     ignore_unknown_fields: bool = False,
     descriptor_pool: DescriptorPool | None = None,
