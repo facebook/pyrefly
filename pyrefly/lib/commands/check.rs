@@ -81,6 +81,7 @@ use crate::commands::files::FilesArgs;
 use crate::commands::files::UpsellDecision;
 use crate::commands::files::get_config_finder_for_snippet;
 use crate::commands::util::CommandExitStatus;
+use crate::commands::util::VersionMismatch;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::baseline::StaleRowScope;
@@ -1694,6 +1695,18 @@ impl CheckArgs {
             true,
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
+
+        // With several files to check, config errors are not fatal when the configs are found,
+        // but a check by the wrong Pyrefly version reports errors that the required version
+        // might not, so stop here.
+        let config_errors = state.as_ref().config_finder().errors();
+        if config_errors.iter().any(ConfigError::is_version_mismatch) {
+            for error in &config_errors {
+                error.print();
+            }
+            return Err(VersionMismatch.into());
+        }
+        state.as_ref().config_finder().add_errors(config_errors);
 
         let config = loaded_handles.first().map(|handle| {
             state.as_ref().config_finder().python_file(

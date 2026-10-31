@@ -128,11 +128,11 @@ Fatal configuration error
 [4]
 ```
 
-With several files to check, the check runs anyway.
+With several files to check, the check also stops before checking any file.
 
 ```scrut {output_stream: stderr}
 $ cd $TMPDIR/required_version && $PYREFLY check a.py b.py --output-format=min-text
 ERROR */pyrefly.toml: Pyrefly * does not satisfy `required-version = "<0"` (glob)
- INFO 2 errors
-[1]
+Fatal configuration error
+[4]
 ```
