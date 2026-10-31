@@ -702,23 +702,29 @@ fn extract_numpydoc_param_names(line: &str) -> Option<Vec<String>> {
 /// See <https://numpydoc.readthedocs.io/en/latest/format.html#parameters>.
 fn parse_numpydoc_params(lines: &[String], docs: &mut HashMap<String, String>) {
     let mut in_section = false;
+    let mut section_indent = 0usize;
     let mut current_params = Vec::new();
     let mut current_lines = Vec::new();
     let mut param_indent = 0usize;
 
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        let indent = leading_space_count(line);
 
-        if lines
-            .get(index + 1)
-            .is_some_and(|next| is_numpydoc_underline(next))
+        // Within a parameter section, deeper-indented headings belong to descriptions.
+        if !trimmed.is_empty()
+            && (!in_section || indent <= section_indent)
+            && lines.get(index + 1).is_some_and(|next| {
+                leading_space_count(next) == indent && is_numpydoc_underline(next)
+            })
         {
             commit_parameter_doc(&mut current_params, &mut current_lines, docs);
             in_section = is_numpydoc_section(trimmed);
+            section_indent = indent;
             continue;
         }
 
-        if is_numpydoc_underline(line) {
+        if indent == section_indent && is_numpydoc_underline(line) {
             continue;
         }
 
@@ -735,7 +741,6 @@ fn parse_numpydoc_params(lines: &[String], docs: &mut HashMap<String, String>) {
             continue;
         }
 
-        let indent = leading_space_count(line);
         if let Some(names) = extract_numpydoc_param_names(trimmed)
             && (current_params.is_empty() || indent <= param_indent)
         {
@@ -1505,9 +1510,11 @@ Summary.
         Number of records.
 "#;
         let docs = parse_parameter_documentation(doc);
-        // Bug: literal dashes end the parameter section.
-        assert_eq!(docs.get("separator").unwrap(), "Example separator::");
-        assert_eq!(docs.get("count"), None);
+        assert_eq!(
+            docs.get("separator").unwrap(),
+            "Example separator::\n\n----\n\nUsed between records."
+        );
+        assert_eq!(docs.get("count").unwrap(), "Number of records.");
     }
 
     #[test]
@@ -1525,9 +1532,11 @@ count : int
     Number of records.
 "#;
         let docs = parse_parameter_documentation(doc);
-        // Bug: an indented heading ends the parameter section.
-        assert_eq!(docs.get("separator").unwrap(), "First paragraph.");
-        assert_eq!(docs.get("count"), None);
+        assert_eq!(
+            docs.get("separator").unwrap(),
+            "First paragraph.\n\nDetails\n-------\nUsed between records."
+        );
+        assert_eq!(docs.get("count").unwrap(), "Number of records.");
     }
 
     #[test]
@@ -1539,8 +1548,7 @@ separator : str
     Used between records.
 "#;
         let docs = parse_parameter_documentation(doc);
-        // Bug: a misaligned underline starts a parameter section.
-        assert_eq!(docs.get("separator").unwrap(), "Used between records.");
+        assert!(docs.is_empty());
     }
 
     #[test]
