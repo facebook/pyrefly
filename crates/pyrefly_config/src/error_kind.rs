@@ -89,6 +89,8 @@ impl Severity {
 pub enum ErrorKind {
     /// Attempting to call a method marked with `@abstractmethod`.
     AbstractMethodCall,
+    /// An `@abstractmethod` has a non-placeholder implementation.
+    AbstractMethodWithImplementation,
     /// Raised when an assert_type() call fails.
     AssertType,
     /// Raised when an assert_type() call fails because the actual type is a subtype of the
@@ -615,6 +617,7 @@ impl ErrorKind {
     pub fn default_severity(self) -> Severity {
         // IMPORTANT: When updating these, also update error-kinds.mdx in the docs
         match self {
+            ErrorKind::AbstractMethodWithImplementation => Severity::Ignore,
             ErrorKind::AttributeAssignOnNever => Severity::Warn,
             ErrorKind::CoverageMissing => Severity::Warn,
             ErrorKind::CoveragePartial => Severity::Warn,
