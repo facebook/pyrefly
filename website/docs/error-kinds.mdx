@@ -1873,22 +1873,33 @@ Default severity: `ignore`
 
 The `strict` preset enables this check as an error.
 
-Pyrefly checks whether each value assigned in a class body exists when that body
-completes. Every completing path must assign the attribute. A path that raises or
-ends in a `Never` or `NoReturn` call does not require an assignment.
+Pyrefly checks whether an assigned attribute exists after the class body or a recognized initialization method completes.
+Recognized methods include `__init__`, `__new__`, `__post_init__`, `__init_subclass__`, and supported test setup methods.
+Each path that completes normally, including an explicit `return`, must leave the attribute initialized.
+Paths that raise or end in a `Never` or `NoReturn` call do not require an assignment.
+Deleting an attribute removes its initialization guarantee.
 
 ```python
 class C:
-    if enabled():
-        value = 1  # possibly-uninitialized-attribute
+    def __init__(self, value: int | None) -> None:
+        if value is not None:
+            self.value = value  # possibly-uninitialized-attribute
+        # The path where value is None completes without assigning self.value.
 ```
 
-Pyrefly reports the error at the definition, even if the attribute is never read.
-A later `hasattr` guard does not suppress it. An assignment in `__init__` does not
-initialize a class attribute. Inherited attributes, conditional method definitions,
-and stub (`.pyi`) files are exempt.
+The check permits an inherited attribute when a base class other than `object` defines the same name.
+An instance `__getattr__` fallback also suppresses this error for instance attributes.
+Pyrefly combines assignments from different methods leniently: one method that initializes the attribute on every completing path suffices.
+This includes ordinary helper methods, even when Pyrefly cannot prove that the constructor calls them.
+Class-body definitions are checked separately, even when a method assigns the same name.
+Assignments inside nested functions do not initialize the enclosing method's attributes.
 
-To disable this check while retaining other strict checks, use:
+Pyrefly reports this error at the attribute definition, even if the attribute is never read.
+A later `hasattr` guard does not suppress this check.
+Conditional method definitions and stub (`.pyi`) files are excluded.
+Bare instance annotations use the separate [`uninitialized-instance-variable`](#uninitialized-instance-variable) check.
+
+To disable this check while keeping other strict checks, use:
 
 ```toml
 preset = "strict"

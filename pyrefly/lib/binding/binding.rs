@@ -77,6 +77,7 @@ use crate::binding::base_class::BaseClassGeneric;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
 use crate::binding::bindings::Bindings;
+use crate::binding::bindings::InitializationStatus;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
@@ -1364,13 +1365,15 @@ pub enum BindingExpect {
         /// If any don't, the variable may be uninitialized.
         termination_keys: Vec<Idx<Key>>,
     },
-    /// Check whether a class-body attribute is initialized on every completing path.
+    /// Check attribute initialization from the class body or any defining method.
     UninitializedAttributeCheck {
         name: Name,
         range: TextRange,
         class: Idx<KeyClass>,
-        /// All missing paths must terminate. None means a path lacks termination evidence.
-        termination_keys: Option<Vec<Idx<Key>>>,
+        /// Instance attributes can also be provided by `__getattr__`.
+        is_instance: bool,
+        /// Any defining method can establish initialization on all its returning paths.
+        initializations: Vec<InitializationStatus>,
     },
     /// Check for forward reference string literal in union type.
     /// At runtime, `type.__or__` cannot handle string literals, so expressions
@@ -1548,15 +1551,17 @@ impl DisplayWith<Bindings> for BindingExpect {
                 name,
                 range,
                 class,
-                termination_keys,
+                is_instance,
+                initializations,
             } => {
                 write!(
                     f,
-                    "UninitializedAttributeCheck({}, {}, {:?}, {:?})",
+                    "UninitializedAttributeCheck({}, {}, {:?}, {}, {:?})",
                     name,
                     ctx.module().display(range),
                     class,
-                    termination_keys
+                    is_instance,
+                    initializations
                 )
             }
             Self::ForwardRefUnion {

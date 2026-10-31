@@ -3207,22 +3207,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 name,
                 range,
                 class,
-                termination_keys,
+                is_instance,
+                initializations,
             } => {
-                let initialized = termination_keys
-                    .as_ref()
-                    .is_some_and(|keys| keys.iter().all(|key| self.get_idx(*key).ty().is_never()));
-                let inherited = !initialized
+                let initialized = initializations.iter().any(|initialized| {
+                    initialized.is_initialized(|key| self.get_idx(key).ty().is_never())
+                });
+                let inherited_or_dynamic = !initialized
                     && self.get_idx(*class).0.as_ref().is_some_and(|cls| {
-                        self.get_mro_for_class(cls)
-                            .ancestors_no_object()
-                            .iter()
-                            .any(|base| {
-                                base.class_object() != cls
-                                    && self.get_class_member(base.class_object(), name).is_some()
-                            })
+                        (*is_instance && self.get_class_member(cls, &dunder::GETATTR).is_some())
+                            || self
+                                .get_mro_for_class(cls)
+                                .ancestors_no_object()
+                                .iter()
+                                .any(|base| {
+                                    base.class_object() != cls
+                                        && self
+                                            .get_class_member(base.class_object(), name)
+                                            .is_some()
+                                })
                     });
-                if !initialized && !inherited {
+                if !initialized && !inherited_or_dynamic {
                     errors
                         .error_builder(
                             *range,

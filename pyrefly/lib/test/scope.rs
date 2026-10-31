@@ -1865,7 +1865,6 @@ def f():
 
 // https://github.com/facebook/pyrefly/issues/4318
 testcase!(
-    bug = "Attributes assigned in methods are not checked for initialization",
     test_conditionally_defined_class_member,
     TestEnv::new().enable_possibly_uninitialized_attribute_error(),
     r#"
@@ -1898,7 +1897,7 @@ class Instance:
         else:
             self.complete = 2
         if coin():
-            self.partial = 1
+            self.partial = 1  # E: Attribute `partial` may be uninitialized
 
 class DynamicInstance:
     if coin():
@@ -1921,11 +1920,11 @@ class PartialWithReturn:
     def __init__(self) -> None:
         if coin():
             return
-        self.value = 1
+        self.value = 1  # E: Attribute `value` may be uninitialized
 
 class BareAnnotation:
     def __init__(self) -> None:
-        self.value: int
+        self.value: int  # E: Attribute `value` may be uninitialized
 
 class CompleteWithNever:
     def __init__(self) -> None:
