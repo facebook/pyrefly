@@ -5247,9 +5247,9 @@ impl Server {
                 Some(&self.lsp_thread_pool),
             ) {
                 actions.extend(quickfixes.into_iter().filter_map(|(title, edits)| {
-                    // A quick fix may carry more than one edit (e.g. the missing
-                    // `@override` fix inserts both the decorator and an import). Group
-                    // every edit by the document it targets into a single workspace edit
+                    // Fixes for missing `@override` and context-manager annotations
+                    // can include several edits. Group every edit by its target document
+                    // into a single workspace edit
                     // so the whole fix applies in one action.
                     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
                     for (info, range, insert_text) in edits {

@@ -27,7 +27,8 @@ pub(crate) fn remove_unused_ignore_code_action(
         ErrorQuickFix::RemoveUnusedSuppression(edit) => Some(edit),
         ErrorQuickFix::ReplaceWithEnumMember { .. }
         | ErrorQuickFix::AssertNotNone
-        | ErrorQuickFix::ImportModule { .. } => None,
+        | ErrorQuickFix::ImportModule { .. }
+        | ErrorQuickFix::ReplaceDeprecatedContextManagerReturn(_) => None,
     })?;
     let title = if edit.replacement.is_empty() {
         "Remove suppression comment"
