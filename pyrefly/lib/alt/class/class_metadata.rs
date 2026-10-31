@@ -1823,9 +1823,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             BaseClass::Call(x) => {
-                // Ignore all type errors here since they'll be reported in `class_bases_of` anyway.
+                // Call diagnostics are reported by `TypeCheckBaseClassExpr`.
                 let errors = ErrorCollector::new(self.module().dupe(), ErrorStyle::Never);
-                let ty = self.expr_infer(x, &errors);
+                let ty = self.expr_infer(x.as_expr(), &errors);
                 match self.untype_opt(ty.clone(), x.range(), &errors) {
                     None => BaseClassParseResult::InvalidType(ty, x.range()),
                     Some(ty) => parse_base_class_type(ty),

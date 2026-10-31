@@ -351,8 +351,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Some((ty, x.range()))
                 }
                 BaseClass::Call(x) => {
-                    let mut ty =
-                        self.expr_untype(x, TypeFormContext::BaseClassList, &fake_error_collector);
+                    let mut ty = self.expr_untype(
+                        x.as_expr(),
+                        TypeFormContext::BaseClassList,
+                        &fake_error_collector,
+                    );
                     // Call arguments retain raw TypeVars, including parameters bound by this class.
                     if let Some(idx) = self
                         .bindings()
@@ -375,9 +378,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             }
                         });
                     }
-                    if !is_new_type {
-                        self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
-                    }
+                    self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     Some((ty, x.range()))
                 }
                 BaseClass::NamedTuple(..) => Some((
