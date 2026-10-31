@@ -1584,10 +1584,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // container defaults.
         if !has_keyword_conflict
             && let Some(default) = mutable_default
-            && function_id.is_some_and(|id| {
-                id.has_toplevel_qname("sqlalchemy.orm", "mapped_column")
-                    || id.has_toplevel_qname("sqlalchemy.orm._orm_constructors", "mapped_column")
-            })
+            && matches!(
+                callee_kind,
+                Some(CalleeKind::Function(FunctionKind::SqlAlchemyMappedColumn))
+            )
         {
             self.error(
                 errors,
