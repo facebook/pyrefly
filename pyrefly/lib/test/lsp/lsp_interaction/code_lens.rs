@@ -13,6 +13,7 @@ use lsp_types::Uri;
 use pyrefly_lsp_test::IndexingMode;
 use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_lsp_test::object_model::LspInteractionArgs;
@@ -313,6 +314,41 @@ fn test_override_code_lens_notebook_cell_versions() {
         .expect_response_with(|targets: Vec<OverrideCodeLensTargets>| {
             targets.len() == 1 && targets[0].parents.len() == 1
         })
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+// Known bug: the cell version lookup does not resolve the containing unsaved notebook.
+#[test]
+fn test_override_code_lens_unsaved_notebook() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(Default::default()).unwrap();
+    interaction.open_notebook_with_uri(
+        "untitled:Untitled-Overrides.ipynb",
+        "jupyter-notebook",
+        "unsaved_overrides.ipynb",
+        vec![(
+            CellKind::Code,
+            "class Base:\n    def f(self): pass\nclass Child(Base):\n    def f(self): pass\n",
+        )],
+    );
+    let uri = interaction.cell_uri("unsaved_overrides.ipynb", "cell1");
+    let mut params = json!({
+        "textDocument": {"uri": uri.to_string(), "version": 1},
+        "ranges": [{"start": {"line": 3, "character": 8}, "end": {"line": 3, "character": 9}}]
+    });
+    interaction
+        .client
+        .send_request::<OverrideCodeLensRequest>(params.clone())
+        .expect_response_error_code(-32800)
+        .unwrap();
+    params["textDocument"]["version"] = json!(0);
+    interaction
+        .client
+        .send_request::<OverrideCodeLensRequest>(params)
+        .expect_response_error_code(-32800)
         .unwrap();
     interaction.shutdown().unwrap();
 }
