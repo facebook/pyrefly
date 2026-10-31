@@ -1487,4 +1487,105 @@ bar : str
         );
         assert_eq!(docs.get("bar").unwrap(), "another");
     }
+
+    #[test]
+    fn test_parse_numpydoc_literal_dashes() {
+        let doc = r#"
+Summary.
+
+    Parameters
+    ----------
+    separator : str
+        Example separator::
+
+            ----
+
+        Used between records.
+    count : int
+        Number of records.
+"#;
+        let docs = parse_parameter_documentation(doc);
+        // Bug: literal dashes end the parameter section.
+        assert_eq!(docs.get("separator").unwrap(), "Example separator::");
+        assert_eq!(docs.get("count"), None);
+    }
+
+    #[test]
+    fn test_parse_numpydoc_nested_heading() {
+        let doc = r#"
+Parameters
+----------
+separator : str
+    First paragraph.
+
+    Details
+    -------
+    Used between records.
+count : int
+    Number of records.
+"#;
+        let docs = parse_parameter_documentation(doc);
+        // Bug: an indented heading ends the parameter section.
+        assert_eq!(docs.get("separator").unwrap(), "First paragraph.");
+        assert_eq!(docs.get("count"), None);
+    }
+
+    #[test]
+    fn test_parse_numpydoc_misaligned_underline() {
+        let doc = r#"
+Parameters
+    ----------
+separator : str
+    Used between records.
+"#;
+        let docs = parse_parameter_documentation(doc);
+        // Bug: a misaligned underline starts a parameter section.
+        assert_eq!(docs.get("separator").unwrap(), "Used between records.");
+    }
+
+    #[test]
+    fn test_parse_numpydoc_indented_section_boundary() {
+        let doc = r#"
+Summary.
+
+    Parameters
+    ----------
+    separator : str
+        Used between records.
+
+    Other Parameters
+    ----------------
+    count : int
+        Number of records.
+
+    Returns
+    -------
+    result : str
+        Joined records.
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("separator").unwrap(), "Used between records.");
+        assert_eq!(docs.get("count").unwrap(), "Number of records.");
+        assert_eq!(docs.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_numpydoc_dedented_section_boundary() {
+        let doc = r#"
+Notes
+-----
+    Parameters
+    ----------
+    separator : str
+        Used between records.
+
+Returns
+-------
+result : str
+    Joined records.
+"#;
+        let docs = parse_parameter_documentation(doc);
+        assert_eq!(docs.get("separator").unwrap(), "Used between records.");
+        assert_eq!(docs.len(), 1);
+    }
 }
