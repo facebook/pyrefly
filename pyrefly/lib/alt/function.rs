@@ -606,6 +606,32 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self_type = None;
         }
 
+        // Instance methods expect an implicit receiver. When there is no positional
+        // parameter and no `*args` to accept it, report a definition error. Skip
+        // classmethods (see #5294), staticmethods, `@no_type_check`, and methods
+        // wrapped by unresolved custom decorators that may reshape the signature.
+        // See https://github.com/facebook/pyrefly/issues/5295.
+        if defining_cls.is_some()
+            && self_type.is_some()
+            && !flags.is_classmethod
+            && !flags.is_staticmethod
+            && !flags.has_no_type_check
+            && decorators.is_empty()
+            && def.parameters.posonlyargs.is_empty()
+            && def.parameters.args.is_empty()
+            && def.parameters.vararg.is_none()
+        {
+            self.error(
+                errors,
+                def.name.range(),
+                ErrorKind::BadFunctionDefinition,
+                format!(
+                    "Instance method `{}` must accept a positional argument",
+                    def.name
+                ),
+            );
+        }
+
         // The `self`/`cls` receiver of a method is supplied implicitly at call time, so a
         // default value on it is unreachable and almost always a mistake (e.g. `def m(self=1)`).
         // `self_type` is `Some` exactly when there is an implicit receiver (instance methods,

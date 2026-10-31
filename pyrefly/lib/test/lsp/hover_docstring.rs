@@ -152,7 +152,7 @@ Docstring Result: `Test docstring`
 fn attribute_itself_test() {
     let code = r#"
 class Foo:
-    def f():
+    def f(self):
 #       ^
         """Test docstring"""
 "#;
@@ -160,7 +160,7 @@ class Foo:
     assert_eq!(
         r#"
 # main.py
-3 |     def f():
+3 |     def f(self):
             ^
 Docstring Result: `Test docstring`
 "#
@@ -195,16 +195,16 @@ Docstring Result: `Test docstring`
 fn attribute_test() {
     let code = r#"
 class Foo:
-    def f():
+    def f(self):
         """Test docstring"""
-print(Foo.f())
+print(Foo.f)
 #         ^
 "#;
     let report = get_batched_lsp_operations_report(&[("main", code)], test_report_factory(code));
     assert_eq!(
         r#"
 # main.py
-5 | print(Foo.f())
+5 | print(Foo.f)
               ^
 Docstring Result: `Test docstring`
 "#

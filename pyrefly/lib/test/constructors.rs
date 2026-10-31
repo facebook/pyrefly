@@ -852,9 +852,9 @@ from typing import overload
 
 class C:
     @overload
-    def __init__(): ...  # E: Overloaded function must have an implementation
+    def __init__(): ...  # E: Overloaded function must have an implementation  # E: Instance method `__init__` must accept a positional argument
     @overload
-    def __init__(): ...
+    def __init__(): ...  # E: Instance method `__init__` must accept a positional argument
 
 C()  # E: This method has no `self` parameter to receive the implicit instance argument
     "#,

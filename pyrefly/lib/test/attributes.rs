@@ -1379,9 +1379,74 @@ testcase!(
     test_missing_self_parameter,
     r#"
 class C:
-    def f():
+    def f():  # E: Instance method `f` must accept a positional argument
         pass
 C().f()  # E: Expected 0 positional arguments, got 1 (including implicit `self`)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5295
+testcase!(
+    test_instance_method_missing_receiver,
+    r#"
+class Foo:
+    def fn() -> None: ...  # E: Instance method `fn` must accept a positional argument
+
+    def kwargs_only(**kwargs: object) -> None: ...  # E: Instance method `kwargs_only` must accept a positional argument
+
+    def keyword_only(*, x: object = None) -> None: ...  # E: Instance method `keyword_only` must accept a positional argument
+
+    def conventional(self) -> None: ...
+
+    def unconventional(this) -> None: ...
+
+    def positional_only(this, /) -> None: ...
+
+    def variadic(*args: object) -> None: ...
+
+    @staticmethod
+    def static() -> None: ...
+
+    def outer(self) -> None:
+        def inner() -> None: ...
+        inner()
+
+Foo().conventional()
+Foo().unconventional()
+Foo().positional_only()
+Foo().variadic(1)
+Foo.static()
+    "#,
+);
+
+testcase!(
+    test_instance_method_missing_receiver_decorators,
+    r#"
+from typing import Any, Callable, final
+from abc import ABC, abstractmethod
+
+def add_receiver(f: Callable[[], None]) -> Callable[[object], None]:
+    def wrapper(self: object) -> None:
+        f()
+    return wrapper
+
+unknown: Any = lambda f: f
+
+class C(ABC):
+    @final
+    def plain() -> None: ...  # E: Instance method `plain` must accept a positional argument
+
+    @abstractmethod
+    def abstract() -> None: ...  # E: Instance method `abstract` must accept a positional argument
+
+    @add_receiver
+    def wrapped() -> None: ...
+
+    @unknown
+    def uncertain() -> None: ...
+
+    @property
+    def prop() -> int: ...  # E: Instance method `prop` must accept a positional argument
     "#,
 );
 
