@@ -22,7 +22,9 @@ use starlark_map::Hashed;
 
 use crate::binding::binding::KeyClass;
 use crate::binding::bindings::Bindings;
+use crate::binding::pytest::PytestAliases;
 use crate::binding::pytest::PytestBindingInfo;
+use crate::binding::pytest::is_pytest_fixture_function as is_pytest_fixture_function_by_decorator;
 
 #[derive(Clone)]
 pub(crate) struct PytestFixtureDefinition {
@@ -223,15 +225,36 @@ pub(crate) fn find_pytest_fixture_definitions_for_parameter(
     identifier: &Identifier,
     covering_nodes: &[AnyNodeRef],
 ) -> Vec<PytestFixtureDefinition> {
+    if !is_pytest_fixture_parameter_context(bindings, covering_nodes) {
+        return Vec::new();
+    }
     let Some(pytest_info) = bindings.pytest_info() else {
         return Vec::new();
     };
+    let class_def = covering_nodes.iter().find_map(|node| match node {
+        AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
+        _ => None,
+    });
+    let class_key = class_def.and_then(|def| class_key_for_definition(bindings, def));
+    let Some(fixture_class_key) =
+        pytest_info.visible_fixture_class_key(identifier.id(), class_key.as_ref())
+    else {
+        return Vec::new();
+    };
+
+    find_pytest_fixture_definitions_in_module(module, bindings, identifier.id(), fixture_class_key)
+}
+
+pub(crate) fn is_pytest_fixture_parameter_context(
+    bindings: &Bindings,
+    covering_nodes: &[AnyNodeRef],
+) -> bool {
     let function_def = covering_nodes.iter().find_map(|node| match node {
         AnyNodeRef::StmtFunctionDef(stmt) => Some(stmt),
         _ => None,
     });
     let Some(function_def) = function_def else {
-        return Vec::new();
+        return false;
     };
     let class_def = covering_nodes.iter().find_map(|node| match node {
         AnyNodeRef::StmtClassDef(stmt) => Some(stmt),
@@ -240,28 +263,56 @@ pub(crate) fn find_pytest_fixture_definitions_for_parameter(
     let class_is_test = class_def.map(|def| is_pytest_test_class(def));
     let class_key = class_def.and_then(|def| class_key_for_definition(bindings, def));
 
-    if !is_pytest_fixture_function(function_def, class_key, pytest_info)
-        && !is_pytest_test_function(function_def, class_is_test)
-    {
-        return Vec::new();
-    }
-    let Some(fixture_class_key) =
-        pytest_info.visible_fixture_class_key(identifier.id(), class_key.as_ref())
-    else {
+    bindings
+        .pytest_info()
+        .is_some_and(|pytest_info| is_pytest_fixture_function(function_def, class_key, pytest_info))
+        || is_pytest_test_function(function_def, class_is_test)
+}
+
+pub(crate) fn find_pytest_fixture_definitions_in_module(
+    module: &ModModule,
+    bindings: &Bindings,
+    fixture_name: &Name,
+    fixture_class_key: Option<Idx<KeyClass>>,
+) -> Vec<PytestFixtureDefinition> {
+    let Some(pytest_info) = bindings.pytest_info() else {
         return Vec::new();
     };
-
     let mut matches = Vec::new();
     collect_pytest_fixture_definitions_for_name(
         &module.body,
         bindings,
         pytest_info,
-        identifier.id(),
+        fixture_name,
         fixture_class_key,
         &mut matches,
         None,
     );
     matches
+}
+
+pub(crate) fn find_pytest_fixture_definitions_in_conftest(
+    module: &ModModule,
+    fixture_name: &Name,
+) -> Vec<PytestFixtureDefinition> {
+    let aliases = PytestAliases::from_module(module);
+    module
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(function_def)
+                if function_def.name.id() == fixture_name
+                    && is_pytest_fixture_function_by_decorator(function_def, &aliases) =>
+            {
+                Some(PytestFixtureDefinition {
+                    name: function_def.name.id.clone(),
+                    range: function_def.name.range,
+                    docstring_range: Docstring::range_from_stmts(&function_def.body),
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Returns all parameter ranges that reference the fixture definition in this module.
