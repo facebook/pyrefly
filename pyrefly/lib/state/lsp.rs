@@ -1735,7 +1735,8 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn resolve_named_import(
+    /// Resolve a named import through re-exports and package submodules.
+    pub(crate) fn resolve_named_import(
         &self,
         handle: &Handle,
         module_name: ModuleName,

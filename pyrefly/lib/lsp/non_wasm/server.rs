@@ -329,7 +329,7 @@ use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
 use crate::lsp::non_wasm::queue::QueuedEvent;
-use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
+use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_actions;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::lsp::non_wasm::type_error_display_status::BuildSystemStatus;
@@ -5536,13 +5536,29 @@ impl Server {
             }
             record_code_action_telemetry("move_symbol_new_file", start);
             let start = Instant::now();
-            if let Some(action) = safe_delete_file_code_action(
+            let supports_find_usages = self
+                .initialize_params
+                .initialization_options
+                .as_ref()
+                .and_then(|options| options.get("pyrefly"))
+                .and_then(|options| options.get("findFileUsages"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if let Some(mut file_actions) = safe_delete_file_code_actions(
                 &self.initialize_params.capabilities,
+                supports_find_usages,
                 &self.state,
                 transaction,
                 uri,
+                |path| {
+                    self.open_files
+                        .read()
+                        .contains_key(path)
+                        .then(|| make_open_handle(&self.state, path))
+                },
+                |location| self.to_lsp_location(location),
             ) {
-                actions.push(action);
+                actions.append(&mut file_actions);
             }
             record_code_action_telemetry("safe_delete_file", start);
         }
