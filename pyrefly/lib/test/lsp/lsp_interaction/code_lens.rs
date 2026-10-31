@@ -358,7 +358,6 @@ fn test_override_code_lens_unsaved_notebook() {
     interaction.shutdown().unwrap();
 }
 
-// Known bug: target conversion uses code-cell indices to select from all notebook cells.
 #[test]
 fn test_override_code_lens_mixed_notebook_cells() {
     let root = get_test_files_root();
@@ -376,7 +375,6 @@ fn test_override_code_lens_mixed_notebook_cells() {
             ),
         ],
     );
-    let markdown_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell1");
     let base_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell2");
     let child_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell3");
     let ranges = json!([{
@@ -393,7 +391,7 @@ fn test_override_code_lens_mixed_notebook_cells() {
             targets.len() == 1
                 && targets[0].implementations.len() == 1
                 && targets[0].implementations[0].name == "Child.f"
-                && targets[0].implementations[0].location.uri == base_uri
+                && targets[0].implementations[0].location.uri == child_uri
                 && targets[0].implementations[0].location.range.start.line == 1
         })
         .unwrap();
@@ -407,7 +405,7 @@ fn test_override_code_lens_mixed_notebook_cells() {
             targets.len() == 1
                 && targets[0].parents.len() == 1
                 && targets[0].parents[0].name == "Base.f"
-                && targets[0].parents[0].location.uri == markdown_uri
+                && targets[0].parents[0].location.uri == base_uri
                 && targets[0].parents[0].location.range.start.line == 1
         })
         .unwrap();
