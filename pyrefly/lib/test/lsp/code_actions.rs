@@ -1815,6 +1815,50 @@ fn quickfix_deprecated_contextmanager_reuses_imports_on_repeated_fixes() {
 }
 
 #[test]
+fn quickfix_deprecated_contextmanager_generator_import_aliases() {
+    for (decorator, iterator, generator, async_prefix, defaults) in [
+        (
+            "contextmanager",
+            "Iterator",
+            "Generator",
+            "",
+            ", None, None",
+        ),
+        (
+            "asynccontextmanager",
+            "AsyncIterator",
+            "AsyncGenerator",
+            "async ",
+            ", None",
+        ),
+    ] {
+        for module in ["typing", "collections.abc"] {
+            for minor in [12, 13] {
+                for alias in ["G", "__G__", "__G"] {
+                    let before = format!(
+                        "from contextlib import {decorator}\n\
+                         from {module} import {iterator}, {generator} as {alias}\n\n\
+                         class C:\n    @{decorator}\n#     ^\n    {async_prefix}def managed(self) -> {iterator}[int]:\n        yield 1\n"
+                    );
+                    let after = apply_contextmanager_fix(&before, minor).unwrap();
+                    let defaults = if minor < 13 { defaults } else { "" };
+                    // Bug: `__G` is mangled to `_C__G` in the method annotation,
+                    // but the module-level import binds only `__G`.
+                    assert!(
+                        after.contains(&format!("def managed(self) -> {alias}[int{defaults}]:")),
+                        "{after}"
+                    );
+                    assert_eq!(
+                        before.matches(" import ").count(),
+                        after.matches(" import ").count()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn quickfix_deprecated_contextmanager_does_not_reuse_late_import() {
     for (decorator, iterator, generator, async_prefix) in [
         ("contextmanager", "Iterator", "Generator", ""),
