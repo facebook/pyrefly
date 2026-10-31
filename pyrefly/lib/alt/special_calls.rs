@@ -12,6 +12,7 @@
  */
 
 use pyrefly_python::dunder;
+use pyrefly_types::display::TypeDisplayContext;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::IntTupleView;
 use pyrefly_types::shaped_array::is_tuple_carrier_shape_middle;
@@ -207,12 +208,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             type_info.visit_mut(&mut |ty| {
                 *ty = self.for_display(ty.clone());
             });
-            self.error(
-                errors,
-                range,
-                ErrorKind::RevealType,
-                format!("revealed type: {type_info}"),
-            );
+            let message = if self.solver().config.reveal_type_qualified_names {
+                let mut types = Vec::new();
+                type_info.visit(&mut |ty| types.push(ty));
+                let mut ctx = TypeDisplayContext::new(&types);
+                ctx.always_display_module_name_except_builtins();
+                format!("revealed type: {}", type_info.display_with(&ctx))
+            } else {
+                format!("revealed type: {type_info}")
+            };
+            self.error(errors, range, ErrorKind::RevealType, message);
             ret
         } else {
             self.error(

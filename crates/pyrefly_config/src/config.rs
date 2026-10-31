@@ -620,6 +620,10 @@ pub struct ConfigFile {
     #[serde(skip)]
     pub search_path_from_args: Vec<PathBuf>,
 
+    /// Set only by the `--reveal-type-qualified-names` command-line flag.
+    #[serde(skip)]
+    pub reveal_type_qualified_names: bool,
+
     /// The list of directories where imports are
     /// imported from, including type checked files.
     /// Does not include command-line overrides or the import root!
@@ -799,6 +803,7 @@ impl Default for ConfigFile {
                 skip_interpreter_query: false,
             },
             search_path_from_args: Vec::new(),
+            reveal_type_qualified_names: false,
             search_path_from_file: Vec::new(),
             disable_search_path_heuristics: false,
             enable_fallback_search_path: false,
@@ -2589,6 +2594,7 @@ mod tests {
                 .unwrap(),
                 project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
                 search_path_from_args: Vec::new(),
+                reveal_type_qualified_names: false,
                 search_path_from_file: vec![PathBuf::from("../..")],
                 disable_search_path_heuristics: false,
                 enable_fallback_search_path: false,
@@ -2999,6 +3005,7 @@ mod tests {
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
             search_path_from_args: Vec::new(),
+            reveal_type_qualified_names: false,
             search_path_from_file: vec![PathBuf::from("../..")],
             disable_search_path_heuristics: false,
             enable_fallback_search_path: false,
@@ -3088,6 +3095,7 @@ mod tests {
                 skip_interpreter_query: false,
             },
             search_path_from_args: Vec::new(),
+            reveal_type_qualified_names: false,
             search_path_from_file: search_path,
             disable_search_path_heuristics: false,
             enable_fallback_search_path: false,
@@ -5456,6 +5464,7 @@ bad-override = "error"
 
         let mut config = ConfigFile {
             search_path_from_args: vec![mylib_dir.clone()],
+            reveal_type_qualified_names: false,
             import_root: Some(root.path().to_path_buf()),
             interpreters: Interpreters {
                 skip_interpreter_query: true,

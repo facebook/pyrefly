@@ -2091,6 +2091,16 @@ Pyrefly uses this diagnostic to communicate the output of the [`reveal_type`](ht
 
 `reveal_type` is a *directive* — it is always shown in CLI output regardless of the [`min-severity`](../configuration#min-severity) threshold, and is never subject to suppression or baseline exclusion. To hide it, set `reveal-type = "ignore"` in the [`errors`](../configuration#errors) table.
 
+Pass `--reveal-type-qualified-names` to display revealed types with their fully qualified names. Builtins are not qualified.
+
+```python
+import numpy as np
+
+reveal_type(np.timedelta64(1, "D"))
+# default:  timedelta64[timedelta]
+# with --reveal-type-qualified-names:  numpy.timedelta64[datetime.timedelta]
+```
+
 ## string-as-iterable
 
 Default severity: `ignore`

@@ -565,6 +565,7 @@ pub struct SolverConfig {
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
     pub legacy_overload_expansion: bool,
+    pub reveal_type_qualified_names: bool,
 }
 
 #[derive(Debug)]
@@ -4553,6 +4554,7 @@ mod tests {
             strict_partial_subtyping: false,
             spec_compliant_overloads: false,
             legacy_overload_expansion: false,
+            reveal_type_qualified_names: false,
         });
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);

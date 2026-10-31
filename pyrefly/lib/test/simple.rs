@@ -3149,3 +3149,22 @@ def main(a: DataFrame) -> None:
         func(s)
     "#,
 );
+
+testcase!(
+    test_reveal_type_qualified_names,
+    TestEnv::one("foo", "class Box[T]:\n    attr: object").enable_reveal_type_qualified_names(),
+    r#"
+from typing import reveal_type
+import datetime
+from foo import Box
+
+class Local: ...
+
+def f(b: Box[datetime.date], local: Local, xs: list[int]) -> None:
+    reveal_type(b)  # E: revealed type: foo.Box[datetime.date]
+    reveal_type(local)  # E: revealed type: main.Local
+    reveal_type(xs)  # E: revealed type: list[int]
+    if isinstance(b.attr, datetime.date):
+        reveal_type(b)  # E: revealed type: foo.Box[datetime.date] (_.attr: datetime.date)
+"#,
+);

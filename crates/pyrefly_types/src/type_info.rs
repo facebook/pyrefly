@@ -15,6 +15,7 @@ use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_bytes;
+use pyrefly_util::display::Fmt;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
@@ -22,6 +23,7 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::smallmap;
 use vec1::Vec1;
 
+use crate::display::TypeDisplayContext;
 use crate::facet::FacetKind;
 use crate::type_var::TypeVar;
 use crate::types::AnyStyle;
@@ -364,19 +366,33 @@ impl TypeInfo {
             })
             .collect()
     }
-}
 
-impl Display for TypeInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.ty().fmt(f)?;
+    /// `ctx` must have been created from every type in this `TypeInfo`.
+    pub fn display_with<'a>(&'a self, ctx: &'a TypeDisplayContext<'a>) -> impl Display + 'a {
+        Fmt(move |f| self.fmt_with(&|ty, f| write!(f, "{}", ctx.display(ty)), f))
+    }
+
+    fn fmt_with(&self, fmt_ty: &FmtType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_ty(self.ty(), f)?;
         if let Some(facets) = &self.facets
             && facets.has_displayable_content()
         {
-            write!(f, " ({facets})")?;
+            write!(f, " (")?;
+            facets.fmt_with_prefix(&mut Vec::new(), fmt_ty, f)?;
+            write!(f, ")")?;
         }
         Ok(())
     }
 }
+
+impl Display for TypeInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_with(&|ty, f| ty.fmt(f), f)
+    }
+}
+
+/// Writes a single type.
+type FmtType<'a> = dyn Fn(&Type, &mut fmt::Formatter<'_>) -> fmt::Result + 'a;
 
 /// Limit on the size of [NarrowedFacets].
 ///
@@ -576,6 +592,7 @@ impl NarrowedFacets {
     fn fmt_with_prefix(
         &self,
         prefix: &mut Vec<FacetKind>,
+        fmt_ty: &FmtType,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         let mut first = true;
@@ -591,17 +608,17 @@ impl NarrowedFacets {
                 write!(f, ", ")?;
             }
             match value {
-                NarrowedFacet::Leaf(ty) => Self::fmt_type_with_label(prefix, facet, ty, f),
+                NarrowedFacet::Leaf(ty) => Self::fmt_type_with_label(prefix, facet, ty, fmt_ty, f),
                 NarrowedFacet::WithRoot(ty, facets) => {
-                    Self::fmt_type_with_label(prefix, facet, ty, f)?;
+                    Self::fmt_type_with_label(prefix, facet, ty, fmt_ty, f)?;
                     if facets.has_displayable_content() {
                         write!(f, ", ")?;
-                        facets.fmt_with_prefix_and_facet(prefix, facet, f)?;
+                        facets.fmt_with_prefix_and_facet(prefix, facet, fmt_ty, f)?;
                     }
                     Ok(())
                 }
                 NarrowedFacet::WithoutRoot { facets, .. } => {
-                    facets.fmt_with_prefix_and_facet(prefix, facet, f)
+                    facets.fmt_with_prefix_and_facet(prefix, facet, fmt_ty, f)
                 }
             }?;
         }
@@ -612,10 +629,11 @@ impl NarrowedFacets {
         &self,
         prefix: &mut Vec<FacetKind>,
         facet: &'a FacetKind,
+        fmt_ty: &FmtType,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         prefix.push(facet.clone());
-        self.fmt_with_prefix(prefix, f)?;
+        self.fmt_with_prefix(prefix, fmt_ty, f)?;
         prefix.pop();
         Ok(())
     }
@@ -624,9 +642,11 @@ impl NarrowedFacets {
         prefix: &[FacetKind],
         facet: &FacetKind,
         ty: &Type,
+        fmt_ty: &FmtType,
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
-        write!(f, "_{}{}: {}", prefix.iter().join(""), facet, ty)
+        write!(f, "_{}{}: ", prefix.iter().join(""), facet)?;
+        fmt_ty(ty, f)
     }
 }
 
@@ -650,7 +670,7 @@ impl VisitMut<Type> for NarrowedFacets {
 
 impl Display for NarrowedFacets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.fmt_with_prefix(&mut Vec::new(), f)
+        self.fmt_with_prefix(&mut Vec::new(), &|ty, f| ty.fmt(f), f)
     }
 }
 
