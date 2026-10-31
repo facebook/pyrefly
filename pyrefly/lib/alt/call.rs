@@ -3114,6 +3114,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         "`NotImplemented` is not callable. Did you mean `NotImplementedError`?".to_owned(),
                     );
                 }
+                self.check_pydantic_model_validate_constraints(
+                    ty,
+                    &x.arguments.args,
+                    &x.arguments.keywords,
+                    errors,
+                );
                 match ty.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::AssertType)) => self
                     .call_assert_type(

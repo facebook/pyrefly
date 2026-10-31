@@ -645,6 +645,319 @@ class Bar(Foo):
 );
 
 pydantic_testcase!(
+    test_model_validate_nested_field_range,
+    r#"
+from pydantic import BaseModel, Field
+
+class Item(BaseModel):
+    sku: str
+    quantity: int = Field(ge=1)
+
+class Inventory(BaseModel):
+    items: list[Item]
+
+Inventory.model_validate({"items": [{"sku": "A-100", "quantity": 5}]})
+Inventory.model_validate({"items": [{"sku": "B-200", "quantity": -3}]})  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+
+bad = {"items": [{"sku": "B-200", "quantity": -3}]}  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+Inventory.model_validate(bad)
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_union_alternatives,
+    r#"
+from pydantic import BaseModel, Field
+
+class Positive(BaseModel):
+    x: int = Field(ge=0)
+
+class Negative(BaseModel):
+    x: int = Field(le=-1)
+
+class Either(BaseModel):
+    item: Positive | Negative
+    items: list[Positive | Negative]
+
+Either.model_validate({"item": {"x": -1}, "items": [{"x": -1}, {"x": 1}]})
+Either.model_validate({"item": {"x": 1}, "items": []})
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_custom_input,
+    r#"
+from typing import Self, assert_type
+from pydantic import BaseModel, Field
+
+class Parent(BaseModel):
+    x: int = Field(ge=0)
+
+    @classmethod
+    def model_validate(
+        cls, obj: object = None, *, strict=None, from_attributes=None,
+        context=None, by_alias=None, by_name=None,
+    ) -> Self:
+        return cls(x=1)
+
+class Child(Parent):
+    pass
+
+class Builtin(BaseModel):
+    pass
+
+class Multiple(Builtin, Parent):
+    pass
+
+assert_type(Child.model_validate(), Child)
+assert_type(Multiple.model_validate(), Multiple)
+Parent.model_validate({"x": -1})
+Child.model_validate({"x": -1})
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_alias_selection,
+    r#"
+from pydantic import BaseModel, ConfigDict, Field
+
+class Both(BaseModel):
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+    x: int = Field(ge=0, alias="y")
+
+Both.model_validate({"x": -1, "y": 1})
+Both.model_validate({"x": 1, "y": -1})  # E: violates Pydantic `ge` constraint
+Both.model_validate({"x": 1, "y": -1}, by_name=True, by_alias=False)
+Both.model_validate({"x": -1, "y": 1}, by_name=True, by_alias=False)  # E: violates Pydantic `ge` constraint
+
+class AliasOnly(BaseModel):
+    x: int = Field(ge=0, validation_alias="y")
+
+AliasOnly.model_validate({"x": 1, "y": -1}, by_name=True, by_alias=False)
+AliasOnly.model_validate({"x": -1, "y": 1}, by_name=True, by_alias=False)  # E: violates Pydantic `ge` constraint
+
+class NameOnly(BaseModel):
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=False)
+    x: int = Field(ge=0, alias="y")
+
+NameOnly.model_validate({"x": -1, "y": 1}, by_alias=True, by_name=False)
+NameOnly.model_validate({"x": 1, "y": -1})
+
+def dynamic(flag: bool) -> None:
+    Both.model_validate({"x": -1, "y": 1}, by_alias=flag, by_name=True)
+    Both.model_validate({"x": -1, "y": 1}, **{"by_alias": flag, "by_name": True})
+
+class Outer(BaseModel):
+    child: Both
+
+Outer.model_validate({"child": {"x": 1, "y": -1}}, by_name=True, by_alias=False)
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_dictionary_spreads,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=0)
+
+patch: dict[str, int] = {"x": 1}
+Model.model_validate({"x": -1, **patch})
+Model.model_validate({"x": -1, **{"x": 1}})
+Model.model_validate({**patch, "x": -1})  # E: violates Pydantic `ge` constraint
+Model.model_validate({"x": 1, **{"x": -1}})  # E: violates Pydantic `ge` constraint
+
+def dynamic_key(key: str) -> None:
+    Model.model_validate({"x": -1, key: 1})
+
+class Aliased(BaseModel):
+    model_config = {"validate_by_name": True}
+    x: int = Field(ge=0, alias="y")
+
+Aliased.model_validate({**patch, "x": -1})
+Aliased.model_validate({**patch, "x": -1, "y": 1})
+Aliased.model_validate({**patch, "y": -1})  # E: violates Pydantic `ge` constraint
+"#,
+);
+
+/// Supply a library signature with a version-specific keyword.
+fn model_validate_library_env() -> TestEnv {
+    TestEnv::one(
+        "pydantic.main",
+        r#"
+from typing import Any, Literal, Self, dataclass_transform
+
+@dataclass_transform()
+class BaseModel:
+    @classmethod
+    def model_validate(
+        cls, obj: object, *, extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: Any = None,
+    ) -> Self: ...
+"#,
+    )
+}
+
+testcase!(
+    test_model_validate_library_signature,
+    model_validate_library_env(),
+    r#"
+from typing import assert_type
+from pydantic.main import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+assert_type(Model.model_validate({"x": 1}, extra="forbid"), Model)
+Model.model_validate({"x": 1}, extra="invalid")  # E: is not assignable to parameter `extra`
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_shared_descendants,
+    r#"
+from pydantic import BaseModel
+
+class M0(BaseModel):
+    x: int
+
+class M1(BaseModel):
+    left: M0
+    right: M0
+
+class M2(BaseModel):
+    left: M1
+    right: M1
+
+class M3(BaseModel):
+    left: M2
+    right: M2
+
+class M4(BaseModel):
+    left: M3
+    right: M3
+
+class M5(BaseModel):
+    left: M4
+    right: M4
+
+class M6(BaseModel):
+    left: M5
+    right: M5
+
+class M7(BaseModel):
+    left: M6
+    right: M6
+
+class M8(BaseModel):
+    left: M7
+    right: M7
+
+class M9(BaseModel):
+    left: M8
+    right: M8
+
+class M10(BaseModel):
+    left: M9
+    right: M9
+
+class M11(BaseModel):
+    left: M10
+    right: M10
+
+class M12(BaseModel):
+    left: M11
+    right: M11
+
+class M13(BaseModel):
+    left: M12
+    right: M12
+
+class M14(BaseModel):
+    left: M13
+    right: M13
+"#,
+);
+
+pydantic_testcase!(
+    test_model_validate_from_attributes_accepts_object,
+    r#"
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+def validate(obj: object) -> Model:
+    return Model.model_validate(obj, from_attributes=True)
+"#,
+);
+
+pydantic_testcase!(
+    test_custom_model_validate_is_not_overwritten,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Model(BaseModel):
+    x: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return cls(x=0)
+
+def validate(obj: object) -> int:
+    return Model.model_validate(obj).x
+"#,
+);
+
+pydantic_testcase!(
+    test_super_model_validate_returns_self,
+    r#"
+from typing import Self
+from pydantic import BaseModel
+
+class Parent(BaseModel):
+    x: int
+
+class Child(Parent):
+    y: int
+
+    @classmethod
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        return super().model_validate(
+            obj,
+            strict=strict,
+            from_attributes=from_attributes,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+def validate(obj: object) -> int:
+    return Child.model_validate(obj, from_attributes=True).y
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
