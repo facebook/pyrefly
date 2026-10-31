@@ -396,8 +396,8 @@ assert_type(D[int]()[0], Any)
 class Factory(Generic[params.T]):
     def __new__(cls) -> type[list[params.T]]: ...
 
-class E(Factory[params.T](), Generic[params.T]): ...  # E: Type variable `T` is not in scope
-assert_type(E[int]()[0], Any)
+class E(Factory[params.T](), Generic[params.T]): ...
+assert_type(E[int]()[0], int)
     "#,
 );
 
@@ -413,26 +413,24 @@ class C(factory(1)):  # E: Argument `Literal[1]` is not assignable to parameter 
 );
 
 testcase!(
-    bug = "Constructor callees erase class-bound legacy TypeVars",
     test_call_base_constructor_legacy_typevar,
     r#"
-from typing import Any, Generic, TypeVar, assert_type
+from typing import Generic, TypeVar, assert_type
 
 T = TypeVar("T")
 
 class Factory(Generic[T]):
     def __new__(cls) -> type[list[T]]: ...
 
-class C(Factory[T](), Generic[T]):  # E: Type variable `T` is not in scope
+class C(Factory[T](), Generic[T]):
     pass
 
-assert_type(C[int]()[0], Any)
+assert_type(C[int]()[0], int)
 
 def ident[S](x: type[S]) -> type[S]: ...
-class D(ident(Factory[T]()), Generic[T]): ...  # E: Type variable `T` is not in scope
-assert_type(D[str]()[0], Any)
-class E(type(Factory[T]()), Generic[T]): ...  # E: Type variable `T` is not in scope
-assert_type(E[int]()[0], Any)
+class D(ident(Factory[T]()), Generic[T]): ...
+assert_type(D[str]()[0], str)
+class E(type(Factory[T]()), Generic[T]): ...
     "#,
 );
 
@@ -453,7 +451,6 @@ assert_type(C[str]()[0], str)
 );
 
 testcase!(
-    bug = "Constructor callees erase class-bound ParamSpecs",
     test_call_base_constructor_paramspec,
     r#"
 from typing import Generic, ParamSpec, assert_type
@@ -465,16 +462,15 @@ class Callback(Generic[P]):
 class Factory(Generic[P]):
     def __new__(cls) -> type[Callback[P]]: ...
 
-class C(Factory[P](), Generic[P]): ...  # E: Type variable `P` is not in scope
+class C(Factory[P](), Generic[P]): ...
 
 def check(x: C[[str, int]]) -> None:
     assert_type(x.run("x", 1), int)
-    x.run(1, 1)
+    x.run(1, 1)  # E: Argument `Literal[1]` is not assignable to parameter with type `str`
     "#,
 );
 
 testcase!(
-    bug = "Constructor callees erase class-bound TypeVarTuples",
     test_call_base_constructor_typevartuple,
     r#"
 from typing import Generic, TypeVarTuple, Unpack, assert_type
@@ -483,24 +479,23 @@ Ts = TypeVarTuple("Ts")
 class Factory(Generic[Unpack[Ts]]):
     def __new__(cls) -> type[tuple[Unpack[Ts]]]: ...
 
-class C(Factory[Unpack[Ts]](), Generic[Unpack[Ts]]): ...  # E: Type variable `Ts` is not in scope
-assert_type(C[int, str]()[0], object)
-assert_type(C[int, str]()[1], object)
+class C(Factory[Unpack[Ts]](), Generic[Unpack[Ts]]): ...
+assert_type(C[int, str]()[0], int)
+assert_type(C[int, str]()[1], str)
     "#,
 );
 
 testcase!(
-    bug = "Constructor type arguments and runtime values need separate scoping",
     test_call_base_constructor_runtime_typevar,
     r#"
-from typing import Any, Generic, TypeVar, assert_type
+from typing import Generic, TypeVar, assert_type
 
 T = TypeVar("T")
 class Factory(Generic[T]):
     def __new__(cls, tv: TypeVar) -> type[list[T]]: ...
 
-class C(Factory[T](T), Generic[T]): ...  # E: Type variable `T` is not in scope
-assert_type(C[str]()[0], Any)
+class C(Factory[T](T), Generic[T]): ...
+assert_type(C[str]()[0], str)
     "#,
 );
 
@@ -987,20 +982,19 @@ assert_type(Unbound[int]()[0], Any)
 );
 
 testcase!(
-    bug = "Constructor callees erase class-bound TypeVars imported under another alias",
     test_call_base_constructor_typevar_aliases,
     TestEnv::one("params", "from typing import TypeVar\nT = TypeVar('T')"),
     r#"
-from typing import Any, Generic, assert_type
+from typing import Generic, assert_type
 import params
 from params import T as A, T as B
 
 class Factory(Generic[A]):
     def __new__(cls) -> type[list[A]]: ...
 
-class C(Factory[B](), Generic[A]): ...  # E: Type variable `T` is not in scope
-assert_type(C[int]()[0], Any)
-class D(Factory[params.T](), Generic[B]): ...  # E: Type variable `T` is not in scope
-assert_type(D[str]()[0], Any)
+class C(Factory[B](), Generic[A]): ...
+assert_type(C[int]()[0], int)
+class D(Factory[params.T](), Generic[B]): ...
+assert_type(D[str]()[0], str)
     "#,
 );

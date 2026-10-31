@@ -256,6 +256,9 @@ pub struct Bindings {
     /// so a reverse iteration with "first containing range" yields the
     /// innermost enclosing class.
     class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
+    /// Call expressions in the base class lists of `class` statements, paired with the classes
+    /// they belong to. Call bases never nest, so at most one entry contains a given range.
+    call_base_classes: Vec<(TextRange, ClassDefIndex)>,
     /// Class-body definitions and their owning fields. Other scopes have no entries.
     class_field_definitions: SmallMap<Idx<Key>, KeyClassField>,
     pub(crate) shape_declarations: ShapeDeclarations,
@@ -349,6 +352,8 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
+    /// Call bases of `class` statements, paired with their classes' definition indices.
+    pub(crate) call_base_classes: Vec<(TextRange, ClassDefIndex)>,
     class_field_definitions: SmallMap<Idx<Key>, KeyClassField>,
     pub shape_declarations: ShapeDeclarations,
     pub(super) shape_comments: ShapeComments,
@@ -464,6 +469,7 @@ impl Bindings {
             owned_lambda_params: SmallMap::new(),
             lambda_parameter_derived: OnceLock::new(),
             class_scopes: Vec::new(),
+            call_base_classes: Vec::new(),
             class_field_definitions: SmallMap::new(),
             shape_declarations: ShapeDeclarations::default(),
             subsequently_initialized: SmallSet::new(),
@@ -625,6 +631,19 @@ impl Bindings {
         self.class_scopes
             .iter()
             .rev()
+            .find(|(r, _)| r.contains_range(range))
+            .map(|(_, idx)| *idx)
+    }
+
+    /// Whether this module contains any ordinary call-expression bases.
+    pub(crate) fn has_call_bases(&self) -> bool {
+        !self.call_base_classes.is_empty()
+    }
+
+    /// Returns the class whose base class list holds the call expression containing `range`.
+    pub(crate) fn call_base_class(&self, range: TextRange) -> Option<ClassDefIndex> {
+        self.call_base_classes
+            .iter()
             .find(|(r, _)| r.contains_range(range))
             .map(|(_, idx)| *idx)
     }
@@ -844,6 +863,7 @@ impl Bindings {
             owned_lambda_params: SmallMap::new(),
             next_lambda_param_id: 0,
             class_scopes: Vec::new(),
+            call_base_classes: Vec::new(),
             class_field_definitions: SmallMap::new(),
             shape_declarations: ShapeDeclarations::default(),
             shape_comments: ShapeComments::new(&x, &module_info, errors),
@@ -996,6 +1016,7 @@ impl Bindings {
             owned_lambda_params: builder.owned_lambda_params,
             lambda_parameter_derived: OnceLock::new(),
             class_scopes: builder.class_scopes,
+            call_base_classes: builder.call_base_classes,
             class_field_definitions: builder.class_field_definitions,
             shape_declarations: builder.shape_declarations.finish(),
             subsequently_initialized: builder.subsequently_initialized,

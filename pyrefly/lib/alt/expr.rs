@@ -1526,6 +1526,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // TypeVar (e.g. `list[T]()` at module scope) is an error: `T` is not bound by any
         // enclosing generic scope. Only subscript callees can introduce such a raw TypeVar.
         if matches!(&*x.func, Expr::Subscript(_)) {
+            self.quantify_call_base_legacy_typevars(&mut callee_ty, x.func.range());
             self.check_legacy_typevar_scoping(&mut callee_ty, x.func.range(), errors);
         }
 

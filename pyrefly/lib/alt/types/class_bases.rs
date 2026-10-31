@@ -319,6 +319,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
+    /// Replace raw legacy type variables in a call-base type with the class's type parameters.
+    /// Call bases are ordinary expressions and do not introduce type parameters.
+    /// Only type-variable positions are substituted; runtime values remain unchanged.
+    pub(crate) fn quantify_call_base_legacy_typevars(&self, ty: &mut Type, range: TextRange) {
+        if !self.bindings().has_call_bases() {
+            return;
+        }
+        let mut raw = Vec::new();
+        ty.collect_raw_legacy_type_variables(&mut raw);
+        if raw.is_empty() {
+            return;
+        }
+        let Some(class_index) = self.bindings().call_base_class(range) else {
+            return;
+        };
+        let Some(idx) = self
+            .bindings()
+            .key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class_index)))
+        else {
+            return;
+        };
+        let quantified = self
+            .bindings()
+            .get(idx)
+            .legacy_tparams
+            .iter()
+            .filter_map(|key| {
+                let parameter = self.get_idx(*key).parameter()?;
+                let value = self.legacy_tparam_value(self.bindings().get(*key));
+                Some((value.into_ty(), parameter))
+            })
+            .collect::<SmallMap<_, _>>();
+        ty.transform_types_in_type_variable_positions(&mut |t| {
+            if t.is_raw_legacy_type_variable()
+                && let Some(parameter) = quantified.get(t)
+            {
+                *t = (*parameter).clone().to_type(self.heap);
+            }
+        });
+    }
+
     pub fn class_bases_of(
         &self,
         cls: &Class,
@@ -356,28 +397,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         TypeFormContext::BaseClassList,
                         &fake_error_collector,
                     );
-                    // Call arguments retain raw TypeVars, including parameters bound by this class.
-                    if let Some(idx) = self
-                        .bindings()
-                        .key_to_idx_hashed_opt(Hashed::new(&KeyTParams(cls.index())))
-                    {
-                        let quantified = self
-                            .bindings()
-                            .get(idx)
-                            .legacy_tparams
-                            .iter()
-                            .filter_map(|key| {
-                                let parameter = self.get_idx(*key).parameter()?;
-                                let value = self.legacy_tparam_value(self.bindings().get(*key));
-                                Some((value.into_ty(), parameter))
-                            })
-                            .collect::<SmallMap<_, _>>();
-                        ty.transform_types_in_type_variable_positions(&mut |t| {
-                            if let Some(parameter) = quantified.get(t) {
-                                *t = (*parameter).clone().to_type(self.heap);
-                            }
-                        });
-                    }
+                    self.quantify_call_base_legacy_typevars(&mut ty, x.range());
                     self.check_legacy_typevar_scoping(&mut ty, x.range(), errors);
                     Some((ty, x.range()))
                 }

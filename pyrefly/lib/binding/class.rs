@@ -362,6 +362,10 @@ impl<'a> BindingsBuilder<'a> {
             );
 
             let base_class = self.base_class_of(base.clone(), BaseClassSite::ClassStatement);
+            if matches!(base_class, BaseClass::Call(..)) {
+                self.call_base_classes
+                    .push((base.range(), class_indices.def_index));
+            }
             // NOTE(grievejia): If any of the class base is a specialized generic class (e.g. `Foo[Bar]`), and if the tparam of the
             // generic class has a bound or constraint, we won't be validating the type `Bar` against that bound/constraint of the
             // tparam eagerly in order to avoid dependency cycle. But the validation needs to happen somewhere.
