@@ -1,5 +1,5 @@
 from _typeshed import Incomplete
-from typing import Any, NoReturn
+from typing_extensions import Never
 
 from oauthlib.common import Request
 
@@ -11,7 +11,7 @@ class OAuth2Error(Exception):
     state: str | None
     redirect_uri: str | None
     client_id: str | None
-    scopes: Any
+    scopes: Incomplete | None
     response_type: str | None
     response_mode: str | None
     grant_type: str | None
@@ -147,4 +147,4 @@ class CustomOAuth2Error(OAuth2Error):
         request: Request | None = None,
     ) -> None: ...
 
-def raise_from_error(error: str, params: dict[str, Incomplete] | None = None) -> NoReturn: ...
+def raise_from_error(error: str, params: dict[str, Incomplete] | None = None) -> Never: ...

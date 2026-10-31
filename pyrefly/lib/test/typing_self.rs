@@ -347,6 +347,16 @@ class C(type):
 );
 
 testcase!(
+    test_self_inside_typed_dict,
+    r#"
+from typing import Optional, Self, TypedDict
+
+class TD(TypedDict):
+    x: Optional[Self]  # E: `Self` is not allowed in a `TypedDict`
+    "#,
+);
+
+testcase!(
     test_classmethod_cls_call_returns_self,
     r#"
 from typing import Self
@@ -611,10 +621,11 @@ def test(c: MyClass) -> None:
 "#,
 );
 
-// Regression test for a previously unhandled crash when computing intersection
-// of SelfType and ClassType (after removing SelfType <: ClassType)
+// Narrowing `cls` (a `type[Self]`) via `issubclass` intersects `SelfType(Parent)`
+// with `ClassType(Child)`. That intersection stays a self-type anchored at `Child`,
+// so `cls(...)` resolves through `Child`'s constructor while its result remains
+// assignable to the declared `-> Self`.
 testcase!(
-    bug = "Should not error",
     test_classmethod_self_return_with_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -623,8 +634,7 @@ class Parent:
     @classmethod
     def decode(cls, data: dict) -> Self:
         if issubclass(cls, Child):
-            # This narrowing creates an intersection of a Self type with a concrete type
-            return cls(data, legacy=True) # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
+            return cls(data, legacy=True)
         return cls(data)
 
     def __init__(self, data: dict) -> None:
@@ -639,12 +649,31 @@ assert_type(Child.decode({}), Child)
 "#,
 );
 
+// `isinstance(self, Child)` narrows `self` (a `SelfType(Parent)`) by intersecting
+// with `ClassType(Child)`. The result stays a self-type anchored at `Child`, so
+// `Child`-only members are accessible and `return self` still satisfies `-> Self`.
+testcase!(
+    test_instance_method_self_return_with_isinstance_narrowing,
+    r#"
+from typing import Self, assert_type
+
+class Parent:
+    def widen(self) -> Self:
+        if isinstance(self, Child):
+            assert_type(self.extra, int)
+            return self
+        return self
+
+class Child(Parent):
+    extra: int = 0
+"#,
+);
+
 // Regression test for inherited generic instantiations in ClassType & SelfType
 // intersections. This exercises the soundness guard that only collapses
 // `ClassType(Child) & SelfType(Parent[int])` when the upcast back to `Parent`
 // preserves the same inherited instantiation.
 testcase!(
-    bug = "After `issubclass(cls, Child)` narrowing, `cls()` of type `Child` should be assignable to `Self@Parent` since `Child` is a subclass of `Parent`",
     test_classmethod_self_return_with_generic_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -653,7 +682,7 @@ class Parent[T]:
     @classmethod
     def decode(cls) -> Self:
         if issubclass(cls, Child):
-            return cls()  # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
+            return cls()
         return cls()
 
     def __init__(self) -> None:
@@ -714,7 +743,7 @@ class TypedField(Generic[T, V]):
     def __set__(self, instance: T, value: V) -> None: ...
 
 class Base:
-    field: TypedField[Base, str] = TypedField()
+    field: TypedField["Base", str] = TypedField()
 
     def update(self) -> None:
         self.field = "hello"
@@ -742,7 +771,7 @@ class A: ...
 class D:
     def __init__(self: A): pass  # E: `__init__` method self type `A` is not a superclass of class `D`
     def f(self: A): pass  # E: `f` method self type `A` is not a superclass of class `D`
-    def g(self: type[A]): pass  # E: `g` method self type `type[A]` is not a superclass of class `D`
+    def g(self: type[A]): pass  # E: `g` method self type `type[A]` refers to class `A`, which is not a superclass of class `D`
     def h(self: D): pass # Ok
     "#,
 );
@@ -778,10 +807,25 @@ class D:
     @classmethod
     def f(cls: A): pass  # E: `f` method cls type `A` is not a valid `type[...]` annotation
     @classmethod
-    def g(cls: type[A]): pass  # E: `g` method cls type `type[A]` is not a superclass of class `D`
+    def g(cls: type[A]): pass  # E: `g` method cls type `type[A]` refers to class `A`, which is not a superclass of class `D`
     @classmethod
     def h(cls: type[D]): pass # Ok
 "#,
+);
+
+testcase!(
+    test_classmethod_subclass_cls_diagnostic_wording,
+    r#"
+# Regression for https://github.com/facebook/pyrefly/issues/4703:
+# the diagnostic names the class `Child` that the superclass check compares with `Base`.
+class Base:
+    @classmethod
+    def method(cls: type[Child]) -> None:  # E: `method` method cls type `type[Child]` refers to class `Child`, which is not a superclass of class `Base`
+        pass
+
+class Child(Base):
+    pass
+    "#,
 );
 
 testcase!(

@@ -1,0 +1,126 @@
+name: "Automation: Assign PR owners"
+
+# Nightly sweep that assigns a Pyrefly team engineer (from .github/owners.json)
+# to open PRs that have no assignee and are labeled "waiting-for-reviewer" (by
+# automation_pr_state.yml). It prefers an owner whose review was requested, then
+# the owner who reviewed most recently, then a round robin whose starting owner
+# rotates daily. The picked owner is both assigned and requested as a reviewer
+# so the PR shows up in their review queue.
+#
+# Scheduled runs assign for real. A manual run from the Actions tab exposes a
+# "dry_run" toggle (default off) to preview without assigning.
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only log what would be assigned, without assigning"
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  assign-owners:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read owners.json
+      issues: write # addAssignees is the issues API
+      pull-requests: write
+    steps:
+      - name: Assign owners to unassigned PRs waiting for a reviewer
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Scheduled runs have no inputs and always assign for real; a manual
+            // run assigns unless its dry_run toggle is explicitly checked.
+            const dryRun = (context.payload.inputs && context.payload.inputs.dry_run) === 'true';
+            const { owner, repo } = context.repo;
+
+            // Pyrefly team GitHub handles — single source of truth in
+            // .github/owners.json. Lower-cased for case-insensitive matching.
+            const ownersFile = await github.rest.repos.getContent({
+              owner, repo, path: '.github/owners.json',
+            });
+            const owners = JSON.parse(
+              Buffer.from(ownersFile.data.content, 'base64').toString('utf8'),
+            ).map((o) => o.toLowerCase());
+            if (owners.length === 0) {
+              console.log('owners.json is empty, nothing to assign');
+              return;
+            }
+
+            // Round-robin pool = owners minus intentionally non-assignable
+            // members: managers, hands-off maintainers, and anyone not
+            // responsible for reviewing PRs. They stay in owners.json (still
+            // team members for automation_new_pr.yml) but never receive sweep
+            // assignments.
+            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'grievejia']);
+            const assignable = owners.filter((o) => !NOT_ASSIGNABLE.has(o));
+            if (assignable.length === 0) {
+              console.log('No assignable owners after exclusions, nothing to assign');
+              return;
+            }
+
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', per_page: 100,
+            });
+
+            // Rotate the starting owner once per day so the same person does
+            // not always receive the first PR. The 08:00 UTC boundary is one
+            // hour before the scheduled run, keeping nearby dry and real runs
+            // on the same deterministic rotation without persistent state.
+            const day = Math.floor((Date.now() - 8 * 60 * 60 * 1000) / 86_400_000);
+            let next = day % assignable.length;
+
+            let assigned = 0;
+            for (const pr of prs) {
+              if (pr.assignees.length > 0) continue;
+              if (!pr.labels.some((l) => l.name === 'waiting-for-reviewer')) continue;
+
+              // Prefer an owner the author asked for, then the owner who
+              // reviewed most recently. listReviews returns reviews in
+              // chronological order.
+              const requested = pr.requested_reviewers.map((u) => u.login.toLowerCase());
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              });
+              let pick = [...requested, ...reviews.map((r) => r.user?.login.toLowerCase()).reverse()]
+                .find((login) => assignable.includes(login));
+              if (!pick) {
+                pick = assignable[next];
+                next = (next + 1) % assignable.length;
+              }
+              const requestReview = !requested.includes(pick);
+
+              if (!dryRun) {
+                await github.rest.issues.addAssignees({
+                  owner, repo, issue_number: pr.number, assignees: [pick],
+                });
+                // GitHub silently drops assignees lacking repo access, so verify.
+                const { data: after } = await github.rest.issues.get({ owner, repo, issue_number: pr.number });
+                if (!(after.assignees || []).some((a) => a.login.toLowerCase() === pick)) {
+                  console.log(`#${pr.number}: could not assign ${pick} (no repo access?)`);
+                  continue;
+                }
+                // A failed review request must not undo the assignment we just
+                // verified.
+                if (requestReview) {
+                  try {
+                    await github.rest.pulls.requestReviewers({
+                      owner, repo, pull_number: pr.number, reviewers: [pick],
+                    });
+                  } catch (e) {
+                    console.log(`#${pr.number}: could not request review from ${pick}: ${e.message}`);
+                  }
+                }
+              }
+
+              console.log(`#${pr.number}: ${dryRun ? '[dry-run] ' : ''}assign ${pick}${requestReview ? ' + request review' : ''}`);
+              assigned++;
+            }
+
+            console.log(`Scanned ${prs.length} open PRs. ${dryRun ? 'Would assign' : 'Assigned'}: ${assigned}.`);

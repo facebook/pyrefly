@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -12,6 +13,7 @@ use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::environment::script;
 use pyrefly_config::resolve_unconfigured::UnconfiguredOverride;
 use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::arc_id::ArcId;
@@ -20,6 +22,7 @@ use pyrefly_util::globs::FilteredGlobs;
 use pyrefly_util::globs::Globs;
 use pyrefly_util::globs::HiddenDirFilter;
 use pyrefly_util::includes::Includes;
+use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -27,7 +30,9 @@ use tracing::warn;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::config_finder::apply_unconfigured_resolver_if_applicable;
 use crate::commands::config_finder::default_config_finder_with_overrides;
+use crate::commands::util::VersionMismatch;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigScope;
 use crate::config::config::ConfigSource;
 use crate::config::config::ProjectLayout;
 use crate::config::config::SynthesizedPresetReason;
@@ -69,6 +74,10 @@ pub struct FilesArgs {
     /// Files to exclude when type checking.
     #[arg(long)]
     project_excludes: Option<Vec<String>>,
+    /// Skip the PEP 723 scripts that Pyrefly finds in the project or in the given directories.
+    /// Files given explicitly are still checked.
+    #[arg(long)]
+    exclude_scripts: bool,
 
     /// Explicitly set the Pyrefly configuration to use when type checking.
     /// In "single-file checking mode," this config is applied to all files being checked, ignoring
@@ -99,8 +108,11 @@ fn get_explicit_config(
 
 fn add_config_errors(config_finder: &ConfigFinder, errors: Vec<ConfigError>) -> anyhow::Result<()> {
     if errors.iter().any(|e| e.severity() == Severity::Error) {
-        for e in errors {
+        for e in &errors {
             e.print();
+        }
+        if errors.iter().any(ConfigError::is_version_mismatch) {
+            return Err(VersionMismatch.into());
         }
         Err(anyhow::anyhow!("Fatal configuration error"))
     } else {
@@ -139,7 +151,7 @@ pub fn get_project_config_for_current_dir(
             Some(&current_dir),
             UnconfiguredOverride::Auto,
         );
-        let (config, errors) = args.override_config(synthesized);
+        let (config, errors) = args.override_config_at(synthesized, Some(&current_dir));
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -158,7 +170,7 @@ pub fn get_config_finder_for_snippet(
             let finder = default_config_finder_with_overrides(args.clone(), false, None);
             match finder.directory(&current_dir) {
                 Some(config) => (config, finder.errors()),
-                None => args.override_config(ConfigFile::default()),
+                None => args.override_config_at(ConfigFile::default(), Some(&current_dir)),
             }
         }
     };
@@ -179,6 +191,7 @@ fn get_globs_and_config_for_project(
     project_excludes: Option<Globs>,
     args: ConfigOverrideArgs,
     wrapper: Option<ConfigConfigurerWrapper>,
+    scope: ConfigScope,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
     let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
@@ -200,15 +213,15 @@ fn get_globs_and_config_for_project(
                 path.display(),
             );
         }
-        ConfigSource::Synthetic => {
+        ConfigSource::Synthetic(_) => {
             info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();
-    if let Some(project_dir) = config.source.root().or(current_dir.as_deref())
+    if let Some(project_dir) = config.source.root_from_file().or(current_dir.as_deref())
         && let Some(home_dir) = std::env::home_dir()
         && home_dir.starts_with(project_dir)
-        && config.project_includes == ConfigFile::default_project_includes().from_root(project_dir)
+        && *config.includes(scope) == ConfigFile::default_project_includes().from_root(project_dir)
     {
         // Trying to type-check your entire home directory doesn't usually end well.
         warn!(
@@ -227,7 +240,7 @@ fn get_globs_and_config_for_project(
 
     debug!("Config is: {}", config);
 
-    let mut filtered_globs = config.get_filtered_globs(project_excludes);
+    let mut filtered_globs = config.get_filtered_globs(project_excludes, scope);
     filtered_globs
         .errors()
         .into_iter()
@@ -244,7 +257,7 @@ fn get_globs_and_config_for_project(
 }
 
 /// Get inputs for a per-file check. If an explicit config is passed in, we use it; otherwise, we
-/// find configs via upward search from each file.
+/// find configs via upward search from each file. `files_to_check` must be absolute.
 ///
 /// Also returns the `UpsellDecision`: explicit `--config` always means
 /// `Skip` (the loaded config is real and never carries a synthesized
@@ -258,7 +271,6 @@ fn get_globs_and_config_for_files(
     args: ConfigOverrideArgs,
     wrapper: Option<ConfigConfigurerWrapper>,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
-    let files_to_check = absolutize(files_to_check);
     let args_disable_excludes_heuristics = args.disable_project_excludes_heuristics();
     let get_project_excludes_and_heuristics = move |config: Option<&ConfigFile>| {
         let mut project_excludes = project_excludes.unwrap_or_default();
@@ -327,33 +339,104 @@ fn get_globs_and_config_for_files(
     Ok((Box::new(globs), config_finder, upsell))
 }
 
+/// Skips the PEP 723 scripts among the files of `inner`, except the `explicit_files` that the user
+/// names, which `inner` yields as they are. A script runs in its own environment, so a tool such
+/// as `uv check` checks scripts separately from the project.
+struct ExcludeScripts {
+    inner: Box<dyn Includes>,
+    explicit_files: SmallSet<PathBuf>,
+}
+
+impl ExcludeScripts {
+    fn keeps(&self, path: &Path) -> bool {
+        self.explicit_files.contains(path)
+            || path.extension().is_none_or(|extension| extension != "py")
+            || fs::read_to_string(path).map_or(true, |source| script::metadata(&source).is_none())
+    }
+}
+
+impl Includes for ExcludeScripts {
+    fn roots(&self) -> Vec<PathBuf> {
+        self.inner.roots()
+    }
+
+    fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+        Ok(Box::new(
+            self.inner.files_iter()?.filter(|path| self.keeps(path)),
+        ))
+    }
+
+    fn covers(&self, path: &Path) -> bool {
+        self.inner.covers(path) && self.keeps(path)
+    }
+
+    fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+        self.inner.covers_ignoring_excludes(path)
+    }
+
+    fn errors(&mut self) -> Vec<anyhow::Error> {
+        self.inner.errors()
+    }
+}
+
 impl FilesArgs {
+    /// The file arguments as given on the command line. Empty means project-checking mode.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
     pub fn resolve(
         self,
         config_override: ConfigOverrideArgs,
         wrapper: Option<ConfigConfigurerWrapper>,
+    ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
+        self.resolve_scoped(config_override, wrapper, ConfigScope::Default)
+    }
+
+    /// [`FilesArgs::resolve`], reading the project-mode globs from `scope`.
+    pub fn resolve_scoped(
+        self,
+        config_override: ConfigOverrideArgs,
+        wrapper: Option<ConfigConfigurerWrapper>,
+        scope: ConfigScope,
     ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
         let project_excludes = if let Some(project_excludes) = self.project_excludes {
             Some(absolutize(Globs::new(project_excludes)?))
         } else {
             None
         };
-        if self.files.is_empty() {
+        let files_to_check = absolutize(Globs::new(self.files)?);
+        let explicit_files = files_to_check
+            .explicit_files()
+            .map(Path::to_path_buf)
+            .collect();
+        let (includes, config_finder, upsell) = if files_to_check.is_empty() {
             get_globs_and_config_for_project(
                 self.config,
                 project_excludes,
                 config_override,
                 wrapper,
-            )
+                scope,
+            )?
         } else {
+            // File mode bypasses the config's globs, so `scope` is intentionally unused.
             get_globs_and_config_for_files(
                 self.config,
-                Globs::new(self.files)?,
+                files_to_check,
                 project_excludes,
                 config_override,
                 wrapper,
-            )
-        }
+            )?
+        };
+        let includes = if self.exclude_scripts {
+            Box::new(ExcludeScripts {
+                inner: includes,
+                explicit_files,
+            })
+        } else {
+            includes
+        };
+        Ok((includes, config_finder, upsell))
     }
 
     pub fn get(
@@ -366,7 +449,50 @@ impl FilesArgs {
             files,
             config,
             project_excludes: None,
+            exclude_scripts: false,
         }
         .resolve(args, wrapper)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exclude_scripts() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let script = root.join("script.py");
+        let module = root.join("module.py");
+        let stub = root.join("stub.pyi");
+        let metadata = "# /// script\n# dependencies = [\"six\"]\n# ///\n";
+        fs::write(&script, metadata).unwrap();
+        fs::write(&module, "x = 1\n").unwrap();
+        fs::write(&stub, metadata).unwrap();
+        let files = |explicit_files: Vec<PathBuf>| {
+            let includes = ExcludeScripts {
+                inner: Box::new(FilteredGlobs::new(
+                    Globs::new(vec![root.to_string_lossy().into_owned()]).unwrap(),
+                    Globs::empty(),
+                    None,
+                    HiddenDirFilter::Disabled,
+                )),
+                explicit_files: explicit_files.into_iter().collect(),
+            };
+            let mut files = includes.files_iter().unwrap().collect::<Vec<_>>();
+            files.sort();
+            files
+        };
+        assert_eq!(
+            files(Vec::new()),
+            vec![module.clone(), stub.clone()],
+            "a script found in a directory is skipped, and a stub is never a script",
+        );
+        assert_eq!(
+            files(vec![script.clone()]),
+            vec![module, script, stub],
+            "an explicitly given script is checked",
+        );
     }
 }

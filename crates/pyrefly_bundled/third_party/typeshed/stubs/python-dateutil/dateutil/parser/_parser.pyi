@@ -3,8 +3,8 @@ from _typeshed import SupportsRead
 from collections.abc import Callable, Mapping
 from datetime import _TzInfo, datetime
 from io import StringIO
-from typing import IO, Any, Literal, overload
-from typing_extensions import Self, TypeAlias
+from typing import IO, Any, Literal, TypeAlias, overload
+from typing_extensions import Self
 
 _FileOrStr: TypeAlias = bytes | str | IO[str] | IO[Any]
 _TzData: TypeAlias = _TzInfo | int | str | None
@@ -77,6 +77,7 @@ class _ymd(list[int]):
 class parser:
     info: parserinfo
     def __init__(self, info: parserinfo | None = None) -> None: ...
+
     @overload
     def parse(
         self,
@@ -140,8 +141,8 @@ class _tzparser:
         stdoffset: int | None
         dstabbr: str | None
         dstoffset: int | None
-        start: _attr
-        end: _attr
+        start: _attr  # pyrefly: ignore [unknown-name]
+        end: _attr  # pyrefly: ignore [unknown-name]
 
         class _attr(_resultbase):
             __slots__ = ["month", "week", "weekday", "yday", "jyday", "day", "time"]
@@ -153,7 +154,7 @@ class _tzparser:
             day: int | None
             time: int | None
 
-        def __init__(self): ...
+        def __init__(self) -> None: ...
 
     def parse(self, tzstr: str | re.Pattern[str]) -> _result | None: ...
 

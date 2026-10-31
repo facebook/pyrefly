@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -17,6 +18,49 @@ def f(a: int, b: int) -> None:
     d = a + 1
     assert_type(d, int)
 "#,
+);
+
+testcase!(
+    test_literal_int_arithmetic,
+    r#"
+from typing import Literal, assert_type
+
+C = 128
+
+assert_type(1 + 2, Literal[3])
+assert_type(10 - 3, Literal[7])
+assert_type(6 * 7, Literal[42])
+assert_type(7 // 2, Literal[3])
+assert_type(-7 // 2, Literal[-4])
+assert_type(7 // -2, Literal[-4])
+assert_type(-7 // -2, Literal[3])
+assert_type(9223372036854775807 + 1, Literal[9223372036854775808])
+assert_type(C + 64, Literal[192])
+
+def f(x: int, y: Literal[1, 2]) -> None:
+    assert_type(x + 1, int)
+    assert_type(y + 1, int)
+
+def loop() -> None:
+    total = 0
+    for _ in range(3):
+        total = total + 1
+    assert_type(total, int)
+"#,
+);
+
+testcase!(
+    test_dict_union_literal_keys,
+    r#"
+from typing import Literal
+
+Allowed = Literal["a", "b", "c"]
+d: dict[Allowed, int] = {"a": 0, "b": 0}
+e: dict[Allowed, int] = d | {"c": 0}
+d |= {"c": 0}
+bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Literal['a', 'b', 'c'] | str, int]` is not assignable to `dict[Allowed, int]`
+bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Literal['a', 'b', 'c'] | str, int | str]` is not assignable to `dict[Allowed, int]`
+    "#,
 );
 
 testcase!(
@@ -121,6 +165,57 @@ class CandidateWeight(Generic[Weight]):
     def __add__(self, other: CandidateWeight[Weight]) -> Weight:
         return self.weight + other.weight
     "#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison,
+    TestEnv::new().enable_incompatible_comparison_error(),
+    r#"
+from collections import UserString
+from decimal import Decimal
+from fractions import Fraction
+
+def compare(
+    x: int,
+    y: str,
+    z: int | str,
+    f: float,
+    b: bytes,
+    ba: bytearray,
+    s: set[int],
+    fs: frozenset[int],
+    d: Decimal,
+    bo: bool,
+    c: complex,
+    mv: memoryview,
+    fr: Fraction,
+    us: UserString,
+) -> None:
+    x == y  # E: Comparison `==` between incompatible types `int` and `str`
+    x != y  # E: Comparison `!=` between incompatible types `int` and `str`
+    z == y
+    x == f
+    x == d
+    b == ba
+    s == fs
+    x == bo
+    c == f
+    b == mv
+    bo == y  # E: Comparison `==` between incompatible types `bool` and `str`
+    mv == y  # E: Comparison `==` between incompatible types `memoryview` and `str`
+    x == fr
+    us == y
+    fr == y  # E: Comparison `==` between incompatible types `Fraction` and `str`
+    us == x  # E: Comparison `==` between incompatible types `UserString` and `int`
+"#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison_default_off,
+    r#"
+def compare(x: int, y: str) -> None:
+    x == y
+"#,
 );
 
 testcase!(
@@ -517,7 +612,7 @@ def f(x: Any):
 testcase!(
     test_binop_on_any,
     r#"
-from typing import Any, assert_type
+from typing import Any, Self, assert_type
 
 def f(x: Any):
     assert_type(1 + x, Any)
@@ -526,6 +621,14 @@ def f(x: Any):
 def f2(x: int | Any):
     assert_type(1 + x, int | Any)
     assert_type(x < 10,  bool | Any )
+
+class C:
+    def __add__(self, other: object, /) -> Self: ...
+    def __radd__(self, other: object, /) -> Self: ...
+
+def f3(x: C, y: Any) -> None:
+    assert_type(x + y, Any)
+    assert_type(y + x, Any)
     "#,
 );
 
@@ -538,10 +641,13 @@ def test1(x: Any) -> None:
     assert_type(x == 1, Any)
     assert_type(1 == x, Any)
     assert_type(x != 1, Any)
-    assert_type(x is None, Any)
-    assert_type(x is not None, Any)
-    assert_type(x in [1, 2], Any)
-    assert_type(1 in x, Any)
+    assert_type(x is None, bool)
+    assert_type(x is not None, bool)
+    assert_type(None is x, bool)
+    assert_type(x in [1, 2], bool)
+    assert_type(x not in [1, 2], bool)
+    assert_type(1 in x, bool)
+    assert_type(1 not in x, bool)
 
 def test2(x: float, y: Any) -> None:
     any( x == y )
@@ -693,12 +799,30 @@ assert_type(int() or NotBoolable(), int | NotBoolable)
 );
 
 testcase!(
+    test_generic_class_bool_context,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+_T = TypeVar("_T")
+
+class Foo(Generic[_T]):
+    def __bool__(self) -> bool:
+        return False
+
+def f(cls: type[Foo] | None = None):
+    x = cls or Foo
+    assert_type(x, type[Foo])
+    return x
+"#,
+);
+
+testcase!(
     test_tensor_type_lambda,
     r#"
 from typing import Callable, cast, assert_type
 
 class Tensor:
-    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
+    __pow__ = cast("Callable[[Tensor, int], Tensor]", lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
     assert_type(x ** i, Tensor)
@@ -863,6 +987,27 @@ True & ThisClassDoesNotWork(False)
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3876
+testcase!(
+    test_reflected_dunder_subclass_priority,
+    r#"
+from enum import IntFlag
+from typing import assert_type
+
+class Color(IntFlag):
+    RED = 1
+    GREEN = 2
+
+def f(x: int, c: Color) -> None:
+    # `int & Color` invokes `Color.__rand__` at runtime because `Color` is a
+    # proper subclass of `int` that overrides the reflected dunder, so the result
+    # keeps the flag type instead of widening to `int`.
+    assert_type(x & c, Color)
+    assert_type(x | c, Color)
+    assert_type(x ^ c, Color)
+"#,
+);
+
 testcase!(
     test_type_of_typevar_equality,
     r#"
@@ -901,6 +1046,31 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4342
+testcase!(
+    test_date_datetime_comparison,
+    r#"
+from datetime import date, datetime
+
+d = date.today()
+dt = datetime.now()
+
+dt < d  # E: `<` is not supported between `datetime` and `date`
+dt <= d  # E: `<=` is not supported between `datetime` and `date`
+dt > d  # E: `>` is not supported between `datetime` and `date`
+dt >= d  # E: `>=` is not supported between `datetime` and `date`
+d < dt  # E: `<` is not supported between `date` and `datetime`
+d <= dt  # E: `<=` is not supported between `date` and `datetime`
+d > dt  # E: `>` is not supported between `date` and `datetime`
+d >= dt  # E: `>=` is not supported between `date` and `datetime`
+
+dt == d
+dt != d
+d < date.today()
+dt < datetime.now()
+"#,
 );
 
 testcase!(
@@ -1089,5 +1259,168 @@ testcase!(
 from typing import assert_type
 _ = [{"col": None}] * 1000
 assert_type([1, 2, 3] * 5, list[int])
+"#,
+);
+
+testcase!(
+    test_add_after_narrow,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if isinstance(x, bytes):
+        return x + b""
+    else:
+        return x + ""
+    "#,
+);
+
+testcase!(
+    test_containment_with_typevars,
+    r#"
+from typing import Iterable
+def f1[T: (str, bytes)](x: T, y: Iterable[T]):
+    return x in y
+def f2[T: (str, bytes)](x: T, y: Iterable[T]):
+    if isinstance(x, str):
+        return x in y
+def f3[T: (str, bytes)](x: T, y: T):
+    return x in y
+    "#,
+);
+
+testcase!(
+    test_binop_on_unknown_types,
+    r#"
+from typing import Any, assert_type
+
+def f(x: Oops | None, y: None | Oops):  # E:  # E:
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+UnknownType: Any
+def g(x: UnknownType | None, y: None | UnknownType):
+    assert_type(x, Any | None)
+    assert_type(y, Any | None)
+
+def h(x: Oops | UnknownType, y: UnknownType | Oops):  # E:  # E:
+    assert_type(x, Any)
+    assert_type(y, Any)
+    "#,
+);
+
+// The operands share a constraint choice, not a value. Each of these calls can
+// produce a nonzero result when the other operand is a nonzero int.
+testcase!(
+    test_constrained_typevar_independent_truthiness_narrow,
+    r#"
+from typing import Literal, reveal_type
+
+def left[T: (int, str)](x: T, y: T) -> Literal[0]:
+    if isinstance(x, int) and not x:
+        reveal_type(x + y)  # E: revealed type: int
+        return x + y  # E: Returned type `int` is not assignable to declared return type `Literal[0]`
+    return 0
+
+def right[T: (int, str)](x: T, y: T) -> Literal[0]:
+    if isinstance(y, int) and not y:
+        reveal_type(x + y)  # E: revealed type: int
+        return x + y  # E: Returned type `int` is not assignable to declared return type `Literal[0]`
+    return 0
+
+def both[T: (int, str)](x: T, y: T) -> Literal[0]:
+    if isinstance(x, int) and isinstance(y, int) and not x:
+        reveal_type(x + y)  # E: revealed type: int
+        return x + y  # E: Returned type `int` is not assignable to declared return type `Literal[0]`
+    return 0
+
+left(0, 1)
+right(1, 0)
+both(0, 1)
+"#,
+);
+
+// ty's generics/legacy/functions.md preserves bare constrained TypeVars through
+// arithmetic and the identity of a narrowed value returned unchanged.
+testcase!(
+    test_constrained_typevar_operator_constraint_correlation,
+    r#"
+from typing import Literal, reveal_type
+
+def bare[T: (int, str)](x: T, y: T) -> T:
+    return x + y
+
+def literals[T: (Literal[0], Literal[1])](x: T, y: T) -> Literal[0]:
+    if not x:
+        reveal_type(x + y)  # E: revealed type: Literal[0]
+        return x + y
+    return 0
+
+def unchanged[T: (int, str)](x: T) -> T:
+    if isinstance(x, int) and not x:
+        return x
+    return x
+
+bare(1, 2)
+bare("a", "b")
+literals(0, 0)
+"#,
+);
+
+// ty also rejects returning literal arithmetic as a narrowed constrained T.
+// Existing class-level constraint preservation in test_add_after_narrow is a
+// Pyrefly compatibility behavior, not a rule to preserve T for every result.
+testcase!(
+    test_constrained_typevar_literal_arithmetic_result,
+    r#"
+from typing import reveal_type
+
+def increment[T: (int, str)](x: T) -> T:
+    if isinstance(x, int) and not x:
+        reveal_type(x + 1)  # E: revealed type: Literal[1]
+        return x + 1  # E: Returned type `Literal[1]` is not assignable to declared return type `T`
+    return x
+
+def bits[T: (bool, str)](x: T, y: T) -> T:
+    if isinstance(x, bool) and isinstance(y, bool) and not x:
+        return x | y  # E: Returned type `bool` is not assignable to declared return type `T`
+    return x
+"#,
+);
+
+// An otherwise empty nominal class may overlap a runtime-checkable protocol.
+testcase!(
+    test_constrained_typevar_protocol_overlap,
+    r#"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class Addable(Protocol):
+    def __add__(self, other: object) -> int: ...
+
+class Base:
+    pass
+
+def uncertain[T: (Addable, Base)](x: T, y: T) -> int:
+    if isinstance(x, Addable):
+        return x + y
+    return 0
+"#,
+);
+
+// One shared union-valued constraint still permits different members per value.
+testcase!(
+    test_constrained_typevar_shared_union_choice,
+    r#"
+from typing import Literal
+
+def mixed[T: (int | str, bytes)](x: T, y: T) -> None:
+    if isinstance(x, int) and not x:
+        x + y  # E: not supported
+
+mixed(0, "not an int")
+
+def literal_union[T: (Literal[0, 1], Literal[2])](x: T, y: T) -> Literal[0]:
+    if not x:
+        return x + y  # E: is not assignable to declared return type `Literal[0]`
+    return 0
 "#,
 );

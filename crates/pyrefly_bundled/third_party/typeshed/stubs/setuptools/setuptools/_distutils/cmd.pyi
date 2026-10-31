@@ -1,7 +1,7 @@
 from _typeshed import BytesPath, StrOrBytesPath, StrPath, Unused
 from abc import abstractmethod
-from collections.abc import Callable, MutableSequence, Sequence
-from typing import Any, ClassVar, Literal, TypeVar, overload
+from collections.abc import Callable, Sequence
+from typing import Any, ClassVar, TypeVar, overload
 from typing_extensions import TypeVarTuple, Unpack
 
 from .dist import Distribution
@@ -20,6 +20,10 @@ class Command:
         list[tuple[str, str, str]]
         | list[tuple[str, str | None, str]]
     ]
+    verbose: bool
+    force: bool | None
+    help: bool
+    finalized: bool
     def __init__(self, dist: Distribution) -> None: ...
     def ensure_finalized(self) -> None: ...
     @abstractmethod
@@ -39,10 +43,12 @@ class Command:
     # NOTE: Because this is private setuptools implementation and we don't re-expose all commands here,
     # we're not overloading each and every command possibility.
     def get_finalized_command(self, command: str, create: bool = True) -> Command: ...
+
     @overload
     def reinitialize_command(self, command: str, reinit_subcommands: bool = False) -> Command: ...
     @overload
     def reinitialize_command(self, command: _CommandT, reinit_subcommands: bool = False) -> _CommandT: ...
+
     def run_command(self, command: str) -> None: ...
     def get_sub_commands(self) -> list[str]: ...
     def warn(self, msg: str) -> None: ...
@@ -50,6 +56,7 @@ class Command:
         self, func: Callable[[Unpack[_Ts]], Unused], args: tuple[Unpack[_Ts]], msg: str | None = None, level: int = 1
     ) -> None: ...
     def mkpath(self, name: str, mode: int = 0o777) -> None: ...
+
     @overload
     def copy_file(
         self,
@@ -70,6 +77,7 @@ class Command:
         link: str | None = None,
         level: Unused = 1,
     ) -> tuple[_BytesPathT | bytes, bool]: ...
+
     def copy_tree(
         self,
         infile: StrPath,
@@ -79,14 +87,14 @@ class Command:
         preserve_symlinks: bool = False,
         level: Unused = 1,
     ) -> list[str]: ...
+
     @overload
     def move_file(self, src: StrPath, dst: _StrPathT, level: Unused = 1) -> _StrPathT | str: ...
     @overload
     def move_file(self, src: BytesPath, dst: _BytesPathT, level: Unused = 1) -> _BytesPathT | bytes: ...
-    @overload
-    def spawn(self, cmd: Sequence[StrOrBytesPath], search_path: Literal[False], level: Unused = 1) -> None: ...
-    @overload
-    def spawn(self, cmd: MutableSequence[bytes | StrPath], search_path: Literal[True] = True, level: Unused = 1) -> None: ...
+
+    def spawn(self, cmd: Sequence[StrOrBytesPath], search_path: Unused = True, level: Unused = 1) -> None: ...
+
     @overload
     def make_archive(
         self,
@@ -107,6 +115,7 @@ class Command:
         owner: str | None = None,
         group: str | None = None,
     ) -> str: ...
+
     def make_file(
         self,
         infiles: str | list[str] | tuple[str, ...],

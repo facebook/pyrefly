@@ -125,6 +125,10 @@ impl<K: Ord, V> TaskHeap<K, V> {
         self.inner.lock().heap.is_empty()
     }
 
+    pub fn clear(&self) {
+        self.inner.lock().heap.clear();
+    }
+
     /// Push a task into the heap with specified ordering.
     /// If `is_lifo` is true, the task will be processed in LIFO order for equal values of `K`.
     /// If `is_lifo` is false, the task will be processed in FIFO order for equal values of `K`.
@@ -173,7 +177,9 @@ impl<K: Ord, V> TaskHeap<K, V> {
             fn drop(&mut self) {
                 let mut lock = self.0.inner.lock();
                 lock.active_workers -= 1;
-                if lock.active_workers == 0 && lock.heap.is_empty() {
+                // Only wake when a worker is parked; a bare `notify_all` still
+                // issues a `futex`.
+                if lock.active_workers == 0 && lock.heap.is_empty() && lock.paused_workers > 0 {
                     self.0.condition.notify_all();
                 }
             }
@@ -200,7 +206,11 @@ impl<K: Ord, V> TaskHeap<K, V> {
                 }
                 None => {
                     if lock.active_workers == 0 {
-                        self.condition.notify_all();
+                        // Only wake when a worker is parked, to avoid a needless
+                        // `futex`.
+                        if lock.paused_workers > 0 {
+                            self.condition.notify_all();
+                        }
                         break;
                     }
                     lock.paused_workers += 1;

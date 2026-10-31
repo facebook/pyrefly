@@ -1,15 +1,15 @@
-import builtins
 import operator
 import types
 import unittest
 from _typeshed import IdentityFunction, SupportsGetItem, Unused
-from builtins import next as next
+from builtins import callable as callable, next as next
 from collections.abc import Callable, ItemsView, Iterable, Iterator as _Iterator, KeysView, Mapping, ValuesView
 from functools import wraps as wraps
 from importlib.util import spec_from_loader as spec_from_loader
 from io import BytesIO as BytesIO, StringIO as StringIO
 from re import Pattern
-from typing import Any, AnyStr, Literal, NoReturn, TypeVar, overload
+from typing import Any, AnyStr, Literal, TypeVar, overload
+from typing_extensions import Never
 
 from six import moves as moves
 
@@ -31,8 +31,6 @@ text_type = str
 binary_type = bytes
 
 MAXSIZE: int
-
-callable = builtins.callable
 
 def get_unbound_function(unbound: types.FunctionType) -> types.FunctionType: ...
 
@@ -68,17 +66,19 @@ indexbytes = operator.getitem
 iterbytes = iter
 
 def assertCountEqual(self: unittest.TestCase, first: Iterable[_T], second: Iterable[_T], msg: str | None = ...) -> None: ...
+
 @overload
 def assertRaisesRegex(self: unittest.TestCase, msg: str | None = ...) -> Any: ...
 @overload
 def assertRaisesRegex(self: unittest.TestCase, callable_obj: Callable[..., object], *args: Any, **kwargs: Any) -> Any: ...
+
 def assertRegex(self: unittest.TestCase, text: AnyStr, expected_regex: AnyStr | Pattern[AnyStr], msg: Any = ...) -> None: ...
 def assertNotRegex(self: unittest.TestCase, text: AnyStr, expected_regex: AnyStr | Pattern[AnyStr], msg: Any = ...) -> None: ...
 
 exec_ = exec
 
-def reraise(tp: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None = None) -> NoReturn: ...
-def raise_from(value: BaseException | type[BaseException], from_value: BaseException | None) -> NoReturn: ...
+def reraise(tp: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None = None) -> Never: ...
+def raise_from(value: BaseException | type[BaseException], from_value: BaseException | None) -> Never: ...
 
 print_ = print
 

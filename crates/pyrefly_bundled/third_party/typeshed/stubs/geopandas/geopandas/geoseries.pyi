@@ -19,7 +19,7 @@ from .explore import _explore_geoseries
 from .io._geoarrow import GeoArrowArray
 from .plotting import plot_series
 
-class GeoSeries(GeoPandasBase, pd.Series[BaseGeometry]):  # type: ignore[type-var,misc]  # pyright: ignore[reportInvalidTypeArguments]
+class GeoSeries(GeoPandasBase, pd.Series[BaseGeometry]):  # type: ignore[type-var,misc]  # pyright: ignore[reportInvalidTypeArguments]  # ty:ignore[invalid-type-arguments]  # pyrefly: ignore [bad-specialization, inconsistent-inheritance]
     # Override the weird annotation of Series.__new__ in pandas-stubs
     def __new__(
         self,
@@ -162,6 +162,7 @@ class GeoSeries(GeoPandasBase, pd.Series[BaseGeometry]):  # type: ignore[type-va
     @doc(_explore_geoseries)  # pyright: ignore[reportUnknownArgumentType]
     def explore(self, *args, **kwargs): ...  # signature of `_explore_geoseries` copied in `@doc`
     def explode(self, ignore_index: bool = False, index_parts: bool = False) -> GeoSeries: ...
+
     @overload
     def set_crs(
         self, crs: _ConvertibleToCRS, epsg: int | None = None, inplace: bool = False, allow_override: bool = False
@@ -172,12 +173,14 @@ class GeoSeries(GeoPandasBase, pd.Series[BaseGeometry]):  # type: ignore[type-va
     ) -> Self: ...
     @overload
     def set_crs(self, crs: _ConvertibleToCRS | None, epsg: int, inplace: bool = False, allow_override: bool = False) -> Self: ...
+
     @overload
     def to_crs(self, crs: _ConvertibleToCRS, epsg: int | None = None) -> GeoSeries: ...
     @overload
     def to_crs(self, crs: _ConvertibleToCRS | None = None, *, epsg: int) -> GeoSeries: ...
     @overload
     def to_crs(self, crs: _ConvertibleToCRS | None, epsg: int) -> GeoSeries: ...
+
     def estimate_utm_crs(self, datum_name: str = "WGS 84") -> CRS: ...
     def to_json(  # type: ignore[override]
         self,
@@ -191,18 +194,20 @@ class GeoSeries(GeoPandasBase, pd.Series[BaseGeometry]):  # type: ignore[type-va
         check_circular: bool = True,
         allow_nan: bool = True,
         cls: type[json.JSONEncoder] | None = None,
-        indent: None | int | str = None,
+        indent: int | str | None = None,
         separators: tuple[str, str] | None = None,
         default: Callable[..., Any] | None = None,  # as typed in the json stdlib module
         sort_keys: bool = False,
         **kwds,
     ) -> str: ...
+
     @overload
     def to_wkb(self, hex: Literal[False] = False, **kwargs) -> pd.Series[bytes]: ...
     @overload
     def to_wkb(self, hex: Literal[True], **kwargs) -> pd.Series[str]: ...
     @overload
     def to_wkb(self, hex: bool = False, **kwargs) -> pd.Series[str] | pd.Series[bytes]: ...
+
     def to_wkt(self, **kwargs) -> pd.Series[str]: ...
     def to_arrow(
         self,

@@ -10,18 +10,20 @@ use std::cell::RefCell;
 use itertools::Itertools;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
+use lsp_types::CompletionRequest;
+use lsp_types::CompletionResolveRequest;
 use lsp_types::CompletionResponse;
+use lsp_types::DidChangeTextDocumentNotification;
 use lsp_types::InsertTextFormat;
-use lsp_types::Url;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::request::Completion;
-use lsp_types::request::ResolveCompletionItem;
-use pyrefly::commands::lsp::IndexingMode;
+use lsp_types::Uri;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_completion_basic() {
@@ -38,9 +40,9 @@ fn test_completion_basic() {
     let foo_path = root_path.join("foo.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -93,9 +95,9 @@ fn test_completion_function_parens_snippet() {
     let foo_path = root_path.join("foo.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -115,7 +117,7 @@ fn test_completion_function_parens_snippet() {
             list.items.iter().any(|item| {
                 item.label == "spam"
                     && item.insert_text.as_deref() == Some("spam($0)")
-                    && item.insert_text_format == Some(InsertTextFormat::SNIPPET)
+                    && item.insert_text_format == Some(InsertTextFormat::Snippet)
             })
         })
         .unwrap();
@@ -154,9 +156,9 @@ fn test_completion_function_parens_disabled() {
     let foo_path = root_path.join("foo.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -176,7 +178,7 @@ fn test_completion_function_parens_disabled() {
             list.items.iter().any(|item| {
                 item.label == "spam"
                     && item.insert_text.is_none()
-                    && item.insert_text_format != Some(InsertTextFormat::SNIPPET)
+                    && item.insert_text_format != Some(InsertTextFormat::Snippet)
             })
         })
         .unwrap();
@@ -199,9 +201,9 @@ fn test_completion_sorted_in_sorttext_order() {
     let foo_path = root_path.join("foo.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -232,7 +234,7 @@ fn test_completion_mru_ranked() {
     let root = get_test_files_root();
     let workspace_root = root.path().join("basic");
     let foo_path = workspace_root.join("foo.py");
-    let foo_uri = Url::from_file_path(&foo_path).unwrap().to_string();
+    let foo_uri = Uri::from_file_path(&foo_path).unwrap().to_string();
 
     let insert_text = "\nclass Alchemy:\n    pass\nclass Alpha:\n    pass\n\nAl";
 
@@ -246,7 +248,7 @@ fn test_completion_mru_ranked() {
     interaction.client.did_open("foo.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
                 "uri": foo_uri.clone(),
                 "languageId": "python",
@@ -286,7 +288,7 @@ fn test_completion_mru_ranked() {
 
     interaction
         .client
-        .send_request::<ResolveCompletionItem>(json!(alpha_item))
+        .send_request::<CompletionResolveRequest>(json!(alpha_item))
         .expect_response_with(|resolved| resolved.label == "Alpha")
         .unwrap();
 
@@ -332,9 +334,9 @@ fn test_completion_keywords() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -355,7 +357,7 @@ fn test_completion_keywords() {
             let mut has_import = false;
             let mut has_def = false;
             for item in &list.items {
-                if item.kind == Some(CompletionItemKind::KEYWORD) {
+                if item.kind == Some(CompletionItemKind::Keyword) {
                     has_if = has_if || item.label == "if";
                     has_import = has_import || item.label == "import";
                     has_def = has_def || item.label == "def";
@@ -388,9 +390,9 @@ fn test_import_completion_skips_hidden_directories() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -416,8 +418,13 @@ fn test_completion_with_autoimport() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -429,9 +436,9 @@ fn test_completion_with_autoimport() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&file).unwrap().to_string(),
+                "uri": Uri::from_file_path(&file).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -452,11 +459,74 @@ fn test_completion_with_autoimport() {
 }
 
 #[test]
+fn test_completion_autoimport_disabled() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "analysis": {
+                    "autoImportCompletions": false
+                }
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file = root_path.join("foo.py");
+    interaction.client.did_open("foo.py");
+
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
+            "textDocument": {
+                "uri": Uri::from_file_path(&file).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "text": "this_is_a_very_long_function_name_so_we_can".to_owned()
+            }],
+        }));
+
+    // With autoImportCompletions disabled, the symbol that would require a new import
+    // must not be offered (no completion item carrying an import edit for it).
+    interaction
+        .client
+        .completion("foo.py", 0, 43)
+        .expect_completion_response_with(|list| {
+            list.items.iter().all(|item| {
+                item.label
+                    != "this_is_a_very_long_function_name_so_we_can_deterministically_test_autoimport_with_fuzzy_search"
+            })
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
 fn test_completion_with_autoimport_submodule() {
     let root = get_test_files_root();
     let root_path = root.path().join("autoimport_submodule");
 
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -491,7 +561,7 @@ fn test_completion_with_autoimport_without_config() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     let root_path = root.path().join("basic");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -506,9 +576,9 @@ fn test_completion_with_autoimport_without_config() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&foo_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&foo_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -531,7 +601,7 @@ fn test_completion_with_autoimport_in_defined_module() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     let root_path = root.path().join("tests_requiring_config");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -547,9 +617,9 @@ fn test_completion_with_autoimport_in_defined_module() {
     let file_content = std::fs::read_to_string(&file).unwrap();
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
                 "textDocument": {
-                    "uri": Url::from_file_path(&file).unwrap().to_string(),
+                    "uri": Uri::from_file_path(&file).unwrap().to_string(),
                     "languageId": "python",
                     "version": 2
                 },
@@ -558,10 +628,10 @@ fn test_completion_with_autoimport_in_defined_module() {
                 }],
             }));
 
-    interaction.client.send_request::<Completion>(
+    interaction.client.send_request::<CompletionRequest>(
         json!({
             "textDocument": {
-                "uri": Url::from_file_path(&file).unwrap().to_string()
+                "uri": Uri::from_file_path(&file).unwrap().to_string()
             },
             "position": {
                 "line": 12,
@@ -585,7 +655,7 @@ fn test_completion_with_autoimport_duplicates() {
     let root = get_test_files_root();
     let mut interaction = LspInteraction::new();
     let root_path = root.path().join("duplicate_export_test");
-    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let scope_uri = Uri::from_file_path(&root_path).unwrap();
 
     interaction.set_root(root_path.clone());
     interaction
@@ -648,9 +718,9 @@ fn test_module_completion_reexports_sorted_lower() {
     let test_path = root.path().join("reexport_test/test.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&test_path).unwrap().to_string(),
+                "uri": Uri::from_file_path(&test_path).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -714,8 +784,13 @@ fn test_stdlib_submodule_completion() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -731,7 +806,7 @@ fn test_stdlib_submodule_completion() {
             list.items.iter().any(|item| {
                 item.label == "errors"
                     && item.detail.as_deref() == Some("email.errors")
-                    && item.kind == Some(CompletionItemKind::MODULE)
+                    && item.kind == Some(CompletionItemKind::Module)
             })
         })
         .unwrap();
@@ -744,8 +819,13 @@ fn test_stdlib_class_completion() {
     let root = get_test_files_root();
     let root_path = root.path().join("basic");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -787,7 +867,7 @@ fn test_completion_incomplete_below_autoimport_threshold() {
             // autoimport suggestions are skipped due to MIN_CHARACTERS_TYPED_AUTOIMPORT,
             // so is_incomplete should be true
             match response {
-                Some(CompletionResponse::List(list)) => list.is_incomplete,
+                Some(CompletionResponse::CompletionList(list)) => list.is_incomplete,
                 _ => false,
             }
         })
@@ -817,7 +897,7 @@ fn test_completion_complete_above_autoimport_threshold() {
             // Since we typed 3 characters (meets threshold), autoimport suggestions
             // are included, so is_incomplete should be false
             match response {
-                Some(CompletionResponse::List(list)) => !list.is_incomplete,
+                Some(CompletionResponse::CompletionList(list)) => !list.is_incomplete,
                 _ => false,
             }
         })
@@ -868,8 +948,13 @@ fn test_autoimport_completions_show_reexported_paths() {
     let root = get_test_files_root();
     let root_path = root.path().join("autoimport_reexport_test");
 
-    let mut interaction =
-        LspInteraction::new_with_indexing_mode(pyrefly::commands::lsp::IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
 
     interaction.set_root(root_path.clone());
     interaction
@@ -1030,7 +1115,7 @@ fn test_deep_submodule_chain_reexport_completion() {
         .expect_completion_response_with(|list| {
             list.items
                 .iter()
-                .any(|item| item.label == "c" && item.kind == Some(CompletionItemKind::MODULE))
+                .any(|item| item.label == "c" && item.kind == Some(CompletionItemKind::Module))
         })
         .unwrap();
 
@@ -1044,7 +1129,7 @@ fn test_deep_submodule_chain_reexport_completion() {
         .expect_completion_response_with(|list| {
             list.items
                 .iter()
-                .any(|item| item.label == "D" && item.kind == Some(CompletionItemKind::CLASS))
+                .any(|item| item.label == "D" && item.kind == Some(CompletionItemKind::Class))
         })
         .unwrap();
 
@@ -1070,7 +1155,7 @@ fn test_relative_import_module_completion() {
         .expect_completion_response_with(|list| {
             list.items.iter().any(|item| {
                 item.label == "foo"
-                    && item.kind == Some(CompletionItemKind::MODULE)
+                    && item.kind == Some(CompletionItemKind::Module)
                     && item.detail.as_deref() == Some("foo")
             })
         })
@@ -1126,6 +1211,32 @@ fn test_relative_import_double_dot_name_completion() {
         .expect_completion_response_with(|list| {
             list.items.iter().any(|item| item.label == "imperial_guard")
         })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn completion_for_import_replaced_with_any_does_not_use_library_source() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("replace_imports_with_any_definition"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .completion("main.py", 8, 6)
+        .expect_completion_response_with(|list| list.items.is_empty())
+        .unwrap();
+
+    interaction.client.did_open("module_boundary.py");
+    interaction
+        .client
+        .completion("module_boundary.py", 7, 16)
+        .expect_completion_response_with(|list| list.items.is_empty())
         .unwrap();
 
     interaction.shutdown().unwrap();

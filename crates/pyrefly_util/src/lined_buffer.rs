@@ -20,6 +20,7 @@ use ruff_notebook::Notebook;
 use ruff_python_ast::Expr;
 use ruff_source_file::LineColumn;
 use ruff_source_file::LineIndex;
+use ruff_source_file::LineRanges;
 use ruff_source_file::OneIndexed;
 use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
@@ -261,7 +262,15 @@ impl LinedBuffer {
                 LineNumber::from_one_indexed(loc.line),
             )
         {
-            Some(cell.to_zero_indexed())
+            // ruff's `cell()` is the raw all-cells index (markdown included), but callers
+            // compare against the code-cell index from `get_code_cell_index`. Translate.
+            let abs = cell.to_zero_indexed();
+            Some(
+                notebook.cells()[..abs]
+                    .iter()
+                    .filter(|c| c.is_code_cell())
+                    .count(),
+            )
         } else {
             None
         }
@@ -298,7 +307,6 @@ impl LinedBuffer {
         // "If the character value is greater than the line length it defaults
         // back to the line length."
         let line_start = self.lines.line_start(line, &self.buffer);
-        let line_end = self.lines.line_end(line, &self.buffer);
         let requested = self.lines.offset(
             SourceLocation {
                 line,
@@ -307,20 +315,8 @@ impl LinedBuffer {
             &self.buffer,
             PositionEncoding::Utf16,
         );
-        // line_end includes the trailing newline. Clamp to the content end
-        // (excluding the newline) so that out-of-bounds positions land on the
-        // last real character rather than spilling into the next line.
-        let content_end = if line_end > line_start
-            && self
-                .buffer
-                .as_bytes()
-                .get(line_end.to_usize().saturating_sub(1))
-                == Some(&b'\n')
-        {
-            line_end - TextSize::from(1)
-        } else {
-            line_end
-        };
+        // LSP positions cannot address a line terminator, including CRLF or a lone CR.
+        let content_end = self.buffer.line_end(line_start);
         std::cmp::min(requested, content_end)
     }
 
@@ -336,10 +332,6 @@ impl LinedBuffer {
             self.from_lsp_position(position.start, notebook_and_cell),
             self.from_lsp_position(position.end, notebook_and_cell),
         )
-    }
-
-    pub fn is_ascii(&self) -> bool {
-        self.lines.is_ascii()
     }
 
     /// Given a one-indexed row in the concatenated source,
@@ -592,7 +584,46 @@ impl DisplayPos {
 mod tests {
     use std::sync::Arc;
 
+    use ruff_notebook::Cell;
+    use ruff_notebook::CellMetadata;
+    use ruff_notebook::CodeCell;
+    use ruff_notebook::MarkdownCell;
+    use ruff_notebook::RawNotebook;
+    use ruff_notebook::RawNotebookMetadata;
+    use ruff_notebook::SourceValue;
+
     use super::*;
+
+    /// A `[code "x = 1", markdown, code "y = 2"]` notebook. Its concatenated
+    /// source (code cells only) is `"x = 1\ny = 2\n"`, so `y = 2` sits at
+    /// code-cell index 1 but all-cells index 2 — the mismatch these tests probe.
+    fn code_markdown_code_notebook() -> Notebook {
+        let code = |src: &str| {
+            Cell::Code(CodeCell {
+                execution_count: None,
+                id: None,
+                metadata: CellMetadata::default(),
+                outputs: vec![],
+                source: SourceValue::String(src.to_owned()),
+            })
+        };
+        let raw = RawNotebook {
+            cells: vec![
+                code("x = 1"),
+                Cell::Markdown(MarkdownCell {
+                    attachments: None,
+                    id: None,
+                    metadata: CellMetadata::default(),
+                    source: SourceValue::String("# heading".to_owned()),
+                }),
+                code("y = 2"),
+            ],
+            metadata: RawNotebookMetadata::default(),
+            nbformat: 4,
+            nbformat_minor: 5,
+        };
+        Notebook::from_raw_notebook(raw, false).unwrap()
+    }
 
     #[test]
     fn test_line_buffer_unicode() {
@@ -708,6 +739,33 @@ mod tests {
         assert_eq!(offset, TextSize::new(contents.len() as u32));
     }
 
+    #[test]
+    fn test_from_lsp_position_clamps_before_line_ending() {
+        for (contents, character, expected_offset, expected_character) in [
+            ("abc", 100, 3, 3),
+            ("abc\ndef", 100, 3, 3),
+            ("abc\r\ndef", 100, 3, 3),
+            ("abc\r\ndef", 4, 3, 3),
+            ("\r\nabc", 100, 0, 0),
+            ("é\r\ndef", 100, 2, 1),
+            ("abc\rdef", 100, 3, 3),
+        ] {
+            let lined_buffer = LinedBuffer::new(Arc::new(contents.to_owned()));
+            let offset =
+                lined_buffer.from_lsp_position(lsp_types::Position { line: 0, character }, None);
+
+            assert_eq!(
+                offset,
+                TextSize::new(expected_offset),
+                "An LSP position cannot address a line terminator in {contents:?}",
+            );
+            assert_eq!(
+                lined_buffer.to_lsp_position(offset, None).character,
+                expected_character,
+            );
+        }
+    }
+
     /// Bug: `LspNotebook::get_code_cell_index` returns an index among ALL cells
     /// (code + markdown), but `Notebook::cell_offsets()` is indexed by valid
     /// CODE cells only. When a notebook has markdown cells interspersed with
@@ -721,43 +779,7 @@ mod tests {
     ///     start of code_1 — giving the wrong concatenated line
     #[test]
     fn test_from_lsp_position_notebook_cell_index_mismatch() {
-        use ruff_notebook::Cell;
-        use ruff_notebook::CellMetadata;
-        use ruff_notebook::CodeCell;
-        use ruff_notebook::MarkdownCell;
-        use ruff_notebook::Notebook;
-        use ruff_notebook::RawNotebook;
-        use ruff_notebook::RawNotebookMetadata;
-        use ruff_notebook::SourceValue;
-
-        let raw = RawNotebook {
-            cells: vec![
-                Cell::Code(CodeCell {
-                    execution_count: None,
-                    id: None,
-                    metadata: CellMetadata::default(),
-                    outputs: vec![],
-                    source: SourceValue::String("x = 1".to_owned()),
-                }),
-                Cell::Markdown(MarkdownCell {
-                    attachments: None,
-                    id: None,
-                    metadata: CellMetadata::default(),
-                    source: SourceValue::String("# heading".to_owned()),
-                }),
-                Cell::Code(CodeCell {
-                    execution_count: None,
-                    id: None,
-                    metadata: CellMetadata::default(),
-                    outputs: vec![],
-                    source: SourceValue::String("y = 2".to_owned()),
-                }),
-            ],
-            metadata: RawNotebookMetadata::default(),
-            nbformat: 4,
-            nbformat_minor: 5,
-        };
-        let notebook = Notebook::from_raw_notebook(raw, false).unwrap();
+        let notebook = code_markdown_code_notebook();
         // source_code() concatenates only code cells: "x = 1\ny = 2\n"
         let source = notebook.source_code().to_owned();
         assert_eq!(source, "x = 1\ny = 2\n");
@@ -787,6 +809,30 @@ mod tests {
             correct_offset, wrong_offset,
             "all-cells index 2 must differ from code-cell index 1 — \
              callers must translate via get_code_cell_index"
+        );
+    }
+
+    /// Regression test: `to_cell_for_lsp` must return the code-cell index
+    /// (matching `get_code_cell_index`), not ruff's raw all-cells index. For
+    /// [code_0, markdown, code_1], a position in "y = 2" is code-cell 1, not
+    /// all-cells index 2.
+    #[test]
+    fn test_to_cell_for_lsp_returns_code_cell_index() {
+        let notebook = code_markdown_code_notebook();
+        let source = notebook.source_code().to_owned();
+        assert_eq!(source, "x = 1\ny = 2\n");
+        let lined_buffer = LinedBuffer::new(Arc::new(source));
+
+        // Offset 0 ("x") is in the first code cell → code-cell index 0.
+        assert_eq!(
+            lined_buffer.to_cell_for_lsp(TextSize::new(0), Some(&notebook)),
+            Some(0)
+        );
+        // Offset 6 ("y") is in the second code cell, which is all-cells index 2
+        // but code-cell index 1.
+        assert_eq!(
+            lined_buffer.to_cell_for_lsp(TextSize::new(6), Some(&notebook)),
+            Some(1)
         );
     }
 }

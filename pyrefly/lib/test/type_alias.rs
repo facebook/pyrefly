@@ -39,6 +39,26 @@ def f2(x: X2[int]):
 );
 
 testcase!(
+    test_type_alias_type_duplicate_legacy_params,
+    r#"
+from typing import Callable, ParamSpec, TypeAliasType, TypeVar, TypeVarTuple, assert_type
+
+T = TypeVar("T")
+Ts = TypeVarTuple("Ts")
+P = ParamSpec("P")
+
+A = TypeAliasType("A", tuple[T, T], type_params=(T, T))  # E: Duplicate type variable `T`
+B = TypeAliasType("B", tuple[*Ts], type_params=(Ts, Ts))  # E: Duplicate type variable `Ts`
+C = TypeAliasType("C", Callable[P, int], type_params=(P, P))  # E: Duplicate type variable `P`
+
+def f(a: A[str], b: B[int, str], c: C[[str]]):
+    assert_type(a, tuple[str, str])
+    assert_type(b, tuple[int, str])
+    assert_type(c, Callable[[str], int])
+    "#,
+);
+
+testcase!(
     test_type_alias_generic,
     r#"
 from typing import assert_type
@@ -138,6 +158,27 @@ X: TypeAlias = T | list[T] | None
 def f(x: X[int]):
     assert_type(x, int | list[int] | None)
     "#,
+);
+
+testcase!(
+    test_ordinary_alias_union_retains_precise_members,
+    r#"
+from collections.abc import Iterable, Mapping
+from typing import Literal, TypeAlias, TypeAliasType, assert_type
+
+type Headers = Mapping[str, str] | Iterable[tuple[str, str]]
+Legacy: TypeAlias = Mapping[str, str] | Iterable[tuple[str, str]]
+type Choice = Literal["auto"] | str
+LegacyChoice: TypeAlias = Literal["auto"] | str
+ViaCall = TypeAliasType("ViaCall", Literal["auto"] | str)
+
+def check(modern: Headers, legacy: Legacy, a: Choice, b: LegacyChoice, c: ViaCall) -> None:
+    assert_type(modern, Mapping[str, str] | Iterable[tuple[str, str]])
+    assert_type(legacy, Mapping[str, str] | Iterable[tuple[str, str]])
+    assert_type(a, str)
+    assert_type(b, str)
+    assert_type(c, str)
+"#,
 );
 
 testcase!(
@@ -578,10 +619,10 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: `Unpack` is not allowed in this context # E: `TypedDict` is not allowed in this context
-t2: TypeAlias = P  # E: `ParamSpec` is not allowed in this context
+t2: TypeAlias = P  # E: `P` is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: `Unpack` is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
-t5: TypeAlias = Ts  # E: `TypeVarTuple` must be unpacked
+t5: TypeAlias = Ts  # E: `TypeVarTuple` is not allowed in this context
 t6: TypeAlias = Generic  # E: Expected a type argument for `Generic`
 t7: TypeAlias = Protocol  # E: Expected a type argument for `Protocol`
 t8: TypeAlias = Generic[int]  # E: `Generic` is not allowed in this context
@@ -691,8 +732,8 @@ testcase!(
 from typing import ParamSpec, TypeVarTuple, Unpack
 P = ParamSpec('P')
 Ts = TypeVarTuple('Ts')
-Error1 = type[P]  # E: `ParamSpec` is not allowed
-Error2 = type[Ts]  # E: `TypeVarTuple` must be unpacked
+Error1 = type[P]  # E: `P` is not allowed
+Error2 = type[Ts]  # E: `TypeVarTuple` is not allowed in this context
 Error3 = type[Unpack[Ts]]  # E: `Unpack` is not allowed
     "#,
 );
@@ -948,6 +989,58 @@ x5: TA | C = val1
 x6: TA | C = val2
 x7: TA | C = C()
 c2: Callable[[int], int] = f2  # E: `(x: C | int | str) -> C | int | str` is not assignable to `(int) -> int`
+    "#,
+);
+
+testcase!(
+    bug = "Union alias names are lost when additional members are merged",
+    test_alias_display_repeated_composition,
+    r#"
+from typing import assert_type, reveal_type
+
+type Alias = int | str | bytes
+
+def grow(x: Alias | float, y: complex, flag: bool) -> None:
+    value = [x if flag else y]
+    assert_type(value, list[int | str | bytes | float | complex])
+    reveal_type(value)  # E: revealed type: list[bytes | complex | float | int | str]
+    result: list[None] = value  # E: `list[bytes | complex | float | int | str]` is not assignable to `list[None]`
+    "#,
+);
+
+testcase!(
+    test_alias_display_collapsed_generic_extra,
+    r#"
+from typing import assert_type, reveal_type
+
+type Alias = int | str | bytes
+
+def pair[T](x: T) -> list[Alias | T]:
+    return [x]
+
+def probe(x: Alias) -> None:
+    value = pair(x)
+    assert_type(value, list[Alias])
+    reveal_type(value)  # E: revealed type: list[bytes | int | str]
+    "#,
+);
+
+fn env_with_shared_display_alias() -> TestEnv {
+    let mut env = TestEnv::new();
+    env.add("a", "type TA = int | str | bytes");
+    env.add("b", "from a import TA\ndef need(x: list[TA]) -> None: ...");
+    env.add("c", "from a import TA\ndef make() -> set[TA]: ...");
+    env
+}
+
+testcase!(
+    test_alias_display_imported_identity,
+    env_with_shared_display_alias(),
+    r#"
+from b import need
+from c import make
+
+need(make())  # E: Argument `set[TA]` is not assignable to parameter `x` with type `list[TA]` in function `b.need`
     "#,
 );
 

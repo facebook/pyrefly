@@ -1,0 +1,83 @@
+name: "Automation: New PR"
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  new-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Auto-assign known contributors
+        uses: actions/github-script@v8
+        with:
+          script: |
+            // Pyrefly team GitHub handles — single source of truth in
+            // .github/owners.json.
+            const ownersFile = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: '.github/owners.json',
+            });
+            const OWNERS = JSON.parse(
+              Buffer.from(ownersFile.data.content, 'base64').toString('utf8'),
+            );
+
+            const author = context.payload.pull_request.user.login;
+
+            if (OWNERS.includes(author.toLowerCase())) {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                assignees: [author],
+              });
+              console.log(`Assigned ${author} as owner`);
+            } else {
+              console.log(`${author} not in owner list, skipping`);
+            }
+      - name: Add labels based on PR author
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            const labels = [];
+
+            // Google team members
+            const googleMembers = ['hurryabit', 'QEDady', 'jakevdp', 'superbobry', 'h-joo'];
+            if (googleMembers.includes(author)) {
+              labels.push('google');
+            }
+
+            // Quansight
+            const quansightMembers = ['MarcoGorelli', 'jorenham'];
+            if (quansightMembers.includes(author)) {
+              labels.push('quansight');
+            }
+
+            if (labels.length > 0) {
+              for (const label of labels) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    labels: [label]
+                  });
+                  console.log(`Added label '${label}' to PR #${pr.number}`);
+                } catch (error) {
+                  console.log(`Failed to add label '${label}' to PR #${pr.number}: ${error.message}`);
+                }
+              }
+            } else {
+              console.log(`No labels to add for PR #${pr.number}: ${pr.title}`);
+            }

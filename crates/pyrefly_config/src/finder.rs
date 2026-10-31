@@ -35,6 +35,9 @@ use crate::error_kind::Severity;
 pub struct ConfigError {
     severity: Severity,
     msg: anyhow::Error,
+    /// Whether the error reports that the running Pyrefly is not the version that the project
+    /// requires, which the CLI check reports with its own exit code.
+    is_version_mismatch: bool,
 }
 
 impl ConfigError {
@@ -42,6 +45,7 @@ impl ConfigError {
         Self {
             severity: Severity::Error,
             msg,
+            is_version_mismatch: false,
         }
     }
 
@@ -49,6 +53,15 @@ impl ConfigError {
         Self {
             severity: Severity::Warn,
             msg,
+            is_version_mismatch: false,
+        }
+    }
+
+    pub fn version_mismatch(msg: anyhow::Error) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg,
+            is_version_mismatch: true,
         }
     }
 
@@ -60,7 +73,7 @@ impl ConfigError {
             Severity::Warn => {
                 warn!("{:#}", self.msg);
             }
-            Severity::Info => {
+            Severity::Hint | Severity::Info => {
                 info!("{:#}", self.msg);
             }
             Severity::Ignore => {}
@@ -71,11 +84,16 @@ impl ConfigError {
         ConfigError {
             severity: self.severity,
             msg: self.msg.context(context),
+            is_version_mismatch: self.is_version_mismatch,
         }
     }
 
     pub fn severity(&self) -> Severity {
         self.severity
+    }
+
+    pub fn is_version_mismatch(&self) -> bool {
+        self.is_version_mismatch
     }
 
     pub fn get_message(&self) -> String {
@@ -229,6 +247,13 @@ impl ConfigFinder {
         self.errors.lock().extend(errors);
     }
 
+    /// Print and clear all accumulated config errors.
+    pub fn print_errors(&self) {
+        for error in self.errors() {
+            error.print();
+        }
+    }
+
     /// Get the config file associated with a (non-Python) file. If no config exists
     /// on disk, return `None`.
     ///
@@ -280,9 +305,7 @@ impl ConfigFinder {
     /// to ensure that config errors are still surfaced if we exit early.
     pub fn checkpoint<R, E>(&self, result: Result<R, E>) -> Result<R, E> {
         if result.is_err() {
-            for error in self.errors() {
-                error.print();
-            }
+            self.print_errors();
         }
         result
     }

@@ -5,14 +5,30 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+use std::slice;
+
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
+use crate::config::config::ConfigFile;
+use crate::config::finder::ConfigFinder;
+use crate::state::lsp::FindPreference;
+use crate::state::require::Require;
 use crate::state::state::State;
+use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
+use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 
@@ -62,6 +78,65 @@ fn get_test_report_do_not_jump_through_renamed_import(
 }
 
 #[test]
+fn endpoint_definition_from_client_literal() {
+    let code = r#"
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+client = TestClient(app)
+client.get("/users")
+#           ^
+"#;
+    let report = super::fastapi_endpoint_support::report_with_framework(code, get_test_report);
+    let def_start = code
+        .find("list_users")
+        .expect("expected list_users definition");
+    let def_end = def_start + "list_users".len();
+    let expected = format!(
+        "Definition Result:\n{}",
+        code_frame_of_source_at_range(
+            code,
+            TextRange::new(
+                TextSize::from(def_start as u32),
+                TextSize::from(def_end as u32)
+            )
+        )
+    );
+    assert!(
+        report.contains(&expected),
+        "missing endpoint definition in report:\n{report}"
+    );
+}
+
+#[test]
+fn endpoint_definition_ignores_non_http_get_calls() {
+    let code = r#"
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/users")
+def list_users():
+    return {"ok": True}
+
+data = {}
+data.get("/users")
+#          ^
+"#;
+    let report = super::fastapi_endpoint_support::report_with_framework(code, get_test_report);
+    assert!(
+        report.contains("Definition Result: None"),
+        "expected no endpoint definition for dict.get(), got:\n{report}"
+    );
+}
+
+#[test]
 fn ignored_test() {
     let code = r#"
 x = 1 # go-to-definition is unsupported for literals
@@ -73,6 +148,25 @@ x = 1 # go-to-definition is unsupported for literals
         r#"
 # main.py
 2 | x = 1 # go-to-definition is unsupported for literals
+        ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn operator_does_not_include_binop_lhs_literal() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
         ^
 Definition Result: None
 "#
@@ -139,7 +233,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-249 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -153,6 +247,281 @@ Definition Result:
 Definition Result:
 11 | class A: pass
            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn typed_dict_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+class Employee(Person):
+    employee_id: int
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+employee: Employee = {"name": "", "employee_id": 0}
+functional: Functional = {"title": ""}
+
+person["name"]
+#       ^
+employee["name"]
+#         ^
+functional["title"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+16 | person["name"]
+             ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+18 | employee["name"]
+               ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+20 | functional["title"]
+                 ^
+Definition Result:
+10 | Functional = TypedDict("Functional", {"title": str})
+                                           ^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn typed_dict_missing_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+functional: Functional = {"title": ""}
+
+person["missing"]
+#       ^
+functional["missing"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+12 | person["missing"]
+             ^
+Definition Result: None
+
+14 | functional["missing"]
+                 ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn definition_of_imported_annotated_metadata_in_parameter_annotation() {
+    let pkg = r#"
+import utils
+"#;
+    let utils = r#"
+class ValueRange:
+    pass
+
+class Unit:
+    pass
+"#;
+    let code = r#"
+from typing import Annotated
+import pkg
+
+def takes(x: Annotated[int, pkg.utils.ValueRange, pkg.utils.Unit]) -> None: ...
+#                                      ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("pkg", pkg), ("utils", utils)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+5 | def takes(x: Annotated[int, pkg.utils.ValueRange, pkg.utils.Unit]) -> None: ...
+                                           ^
+Definition Result:
+2 | class ValueRange:
+          ^^^^^^^^^^
+
+
+# pkg.py
+
+# utils.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_goes_to_fixture_definition() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_without_fixture_definition_uses_parameter_definition() {
+    let code = r#"
+def test_thing(missing_fixture):
+#              ^
+    assert missing_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | def test_thing(missing_fixture):
+                   ^
+Definition Result:
+2 | def test_thing(missing_fixture):
+                   ^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_fixture_function() {
+    let code = r#"
+def my_fixture():
+    return 1
+
+def test_thing(my_fixture):
+#              ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | def test_thing(my_fixture):
+                   ^
+Definition Result:
+5 | def test_thing(my_fixture):
+                   ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_ignores_non_test_function() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+def helper(my_fixture):
+#          ^
+    assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | def helper(my_fixture):
+               ^
+Definition Result:
+8 | def helper(my_fixture):
+               ^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pytest_fixture_parameter_uses_pytest_fixture_scope() {
+    let code = r#"
+import pytest  # type: ignore
+
+@pytest.fixture
+def my_fixture():
+    return 1
+
+class TestThing:
+    @pytest.fixture
+    def my_fixture(self):
+        return 2
+
+    def test_thing(self, my_fixture):
+#                         ^
+        assert my_fixture == 2
+
+class TestOther:
+    def test_other(self, my_fixture):
+#                         ^
+        assert my_fixture == 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+13 |     def test_thing(self, my_fixture):
+                               ^
+Definition Result:
+10 |     def my_fixture(self):
+             ^^^^^^^^^^
+
+18 |     def test_other(self, my_fixture):
+                               ^
+Definition Result:
+5 | def my_fixture():
+        ^^^^^^^^^^
 "#
         .trim(),
         report.trim(),
@@ -405,6 +774,77 @@ Definition Result:
 }
 
 #[test]
+fn pattern_capture_bare_and_mapping_reference_test() {
+    let code = r#"
+def bare(o: object):
+  match o:
+    case y:
+      return y
+#            ^
+def mapping(o: object):
+  match o:
+    case {"k": v, **rest}:
+      return v, rest
+#            ^  ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |       return y
+                 ^
+Definition Result:
+4 |     case y:
+             ^
+
+10 |       return v, rest
+                  ^
+Definition Result:
+9 |     case {"k": v, **rest}:
+                   ^
+
+10 |       return v, rest
+                     ^
+Definition Result:
+9 |     case {"k": v, **rest}:
+                        ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn pattern_capture_reference_test() {
+    let code = r#"
+def test(o: object):
+  match o:
+    case [head, *tail]:
+      return head, tail
+#            ^     ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 |       return head, tail
+                 ^
+Definition Result:
+4 |     case [head, *tail]:
+              ^^^^
+
+5 |       return head, tail
+                       ^
+Definition Result:
+4 |     case [head, *tail]:
+                     ^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn keyword_argument_test_function() {
     let code = r#"
 def foo(x: int, y: str) -> None: pass
@@ -476,6 +916,31 @@ Definition Result:
 Definition Result:
 5 |     def bar(self) -> None:
             ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn keyword_argument_test_class_field() {
+    let code = r#"
+class Foo:
+    x: int
+
+def test() -> None:
+    Foo(x=1)
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 |     Foo(x=1)
+            ^
+Definition Result:
+3 |     x: int
+        ^
 "#
         .trim(),
         report.trim(),
@@ -594,7 +1059,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-249 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -688,14 +1153,14 @@ Definition Result:
 4 | import import_provider as ip
                               ^
 Definition Result:
-1 | 
-    ^
+4 | import import_provider as ip
+                              ^^
 
 7 | def f(x: ip.Foo, y: F):
              ^
 Definition Result:
-1 | 
-    ^
+4 | import import_provider as ip
+                              ^^
 
 7 | def f(x: ip.Foo, y: F):
                         ^
@@ -1243,7 +1708,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-182 | class Path(PurePath):
+184 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1257,11 +1722,11 @@ fn multi_definition_test() {
 if True:
     xxxx = 1
 else:
-    xxxx = 2
+    xxxx = 2  # E: This code is unreachable
 xxxx # it's reasonable to only return the first def, but also reasonable to return both defs
 # ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
@@ -1485,13 +1950,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3632 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -1806,6 +2271,30 @@ Definition Result:
     );
 }
 
+// BUG: A __slots__ entry has no definition target. It should resolve to self.foo (issue #4344).
+#[test]
+fn dunder_slots_entry_definition_test() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn string_literal_not_in_dunder_all() {
     let pkg = r#"
@@ -1988,14 +2477,14 @@ fn unreachable_branch() {
     let code = r#"
 x = 5
 if False:
-    print(x)
+    print(x)  # E: This code is unreachable
     #     ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
-4 |     print(x)
+4 |     print(x)  # E: This code is unreachable
               ^
 Definition Result: None
 
@@ -2274,6 +2763,46 @@ from mymod.submod.deep import Bar
     assert!(
         !report.contains("# mymod/submod/deep/__init__.py"),
         "Go-to-definition should not point to mymod/submod/deep/__init__.py when clicking on 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_module_components_in_string_literal() {
+    let code = r#"
+def include(path: str): ...
+include("accounts.urls")
+#         ^        ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("accounts", "# accounts/__init__.py"),
+            ("accounts.urls", "# accounts/urls.py"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | include("accounts.urls")
+              ^
+Definition Result:
+1 | # accounts/__init__.py
+    ^
+
+3 | include("accounts.urls")
+                       ^
+Definition Result:
+1 | # accounts/urls.py
+    ^
+
+
+# accounts.py
+
+# accounts.urls.py
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -2735,6 +3264,9 @@ class Adder:
     def __call__(self, x: int) -> int:
         return x + 1
 
+    def forward(self, x: int) -> int:
+        return x
+
 adder = Adder()
 adder(5)
 # ^
@@ -2743,8 +3275,8 @@ adder(5)
     assert_eq!(
         r#"
 # main.py
-7 | adder(5)
-      ^
+10 | adder(5)
+       ^
 Definition Result:
 3 |     def __call__(self, x: int) -> int:
             ^^^^^^^^
@@ -2752,6 +3284,92 @@ Definition Result:
         .trim(),
         report.trim(),
     );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5229.
+#[test]
+fn goto_def_nn_module_call_goes_to_forward() {
+    let module_code = r#"
+class Module:
+    def __call__(self, x: int) -> int: ...
+"#;
+    for module_name in ["torch.nn", "torch.nn.modules.module"] {
+        let code = format!(
+            r#"
+from {module_name} import Module
+
+class Model(Module):
+    def forward(self, x: int) -> int:
+        return x
+
+    def run(self) -> int:
+        return self(1)
+#               ^
+
+class Inherited(Model):
+    pass
+
+class Overridden(Model):
+    def forward(self, x: int) -> int:
+        return x + 1
+
+class Holder:
+    model: Model = Model()
+
+model = Model()
+model(1)
+# ^
+inherited = Inherited()
+inherited(1)
+# ^
+overridden = Overridden()
+overridden(1)
+# ^
+holder = Holder()
+holder.model(1)
+#        ^
+model.__call__(1)
+#       ^
+model
+# ^
+module = Module()
+module(1)
+# ^
+"#
+        );
+        let mut env = TestEnv::one(module_name, module_code);
+        env.add("main", &code);
+        let (state, handles) = env.to_state();
+        let handle = handles("main");
+        let forward = code.find("def forward").unwrap() + 4;
+        let overridden_forward = code.rfind("def forward").unwrap() + 4;
+        let call = module_code.find("__call__").unwrap();
+        let model = code.find("model = Model()").unwrap();
+        let expected = [
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", overridden_forward, "forward"),
+            ("main", forward, "forward"),
+            (module_name, call, "__call__"),
+            ("main", model, "model"),
+            (module_name, call, "__call__"),
+        ];
+        let positions = extract_cursors_for_test(&code);
+        assert_eq!(positions.len(), expected.len());
+        for (position, (module, start, name)) in positions.into_iter().zip(expected) {
+            let definitions = state
+                .transaction()
+                .goto_definition(&handle, position)
+                .unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert_eq!(definitions[0].module.name(), ModuleName::from_str(module));
+            assert_eq!(
+                definitions[0].range,
+                TextRange::at(TextSize::new(start as u32), TextSize::of(name)),
+            );
+        }
+    }
 }
 
 #[test]
@@ -2772,6 +3390,124 @@ foo(1)
 Definition Result:
 2 | def foo(x: int) -> int:
         ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_cached_function_call_goes_to_function() {
+    let code = r#"
+from functools import cache, lru_cache
+import functools
+
+@cache
+def cached_add(a: int, b: int) -> int:
+    return a + b
+
+@lru_cache
+def bare_lru_add(a: int, b: int) -> int:
+    return a + b
+
+@lru_cache(maxsize=None)
+def called_lru_add(a: int, b: int) -> int:
+    return a + b
+
+@functools.lru_cache(maxsize=128)
+def qualified_lru_add(a: int, b: int) -> int:
+    return a + b
+
+cached_add(1, 2)
+# ^
+bare_lru_add(1, 2)
+# ^
+called_lru_add(1, 2)
+# ^
+qualified_lru_add(1, 2)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+21 | cached_add(1, 2)
+       ^
+Definition Result:
+6 | def cached_add(a: int, b: int) -> int:
+        ^^^^^^^^^^
+
+23 | bare_lru_add(1, 2)
+       ^
+Definition Result:
+10 | def bare_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^
+
+25 | called_lru_add(1, 2)
+       ^
+Definition Result:
+14 | def called_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^^^
+
+27 | qualified_lru_add(1, 2)
+       ^
+Definition Result:
+18 | def qualified_lru_add(a: int, b: int) -> int:
+         ^^^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_decorated_function_call_goes_to_function() {
+    let task_code = r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+class Task[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def task(*, retries: int = 0) -> Callable[[Callable[P, R]], Task[P, R]]: ...
+"#;
+    let decorated_code = r#"
+from task import task
+
+@task(retries=2)
+def foo(value: int) -> int:
+    return value + 1
+"#;
+    let code = r#"
+from decorated import foo
+
+foo(value=1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("decorated", decorated_code),
+            ("task", task_code),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(value=1)
+      ^
+Definition Result:
+5 | def foo(value: int) -> int:
+        ^^^
+
+
+# decorated.py
+
+# task.py
 "#
         .trim(),
         report.trim(),
@@ -2800,5 +3536,742 @@ Definition Result:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_dataclass_synthesized_init() {
+    // Dataclass with no inherited explicit __init__: gotodef correctly falls
+    // back to the class definition since the synthesized __init__ has no
+    // source location.
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+    y: int
+
+Point(1, 2)
+#  ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+9 | Point(1, 2)
+       ^
+Definition Result:
+5 | class Point:
+          ^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_basemodel_subclass() {
+    // BUG: Gotodef on a subclass constructor call jumps to the inherited
+    // BaseModel.__init__ instead of the subclass class definition. When a
+    // class has synthesized fields (like pydantic models), the user expects
+    // gotodef to navigate to the class definition, not to the base __init__.
+    let basemodel_code = r#"
+class BaseModel:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from .models import BaseModel
+
+class UserConfig(BaseModel):
+    name: str
+    age: int
+
+UserConfig(name="test", age=1)
+#     ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("models", basemodel_code)],
+        get_test_report,
+    );
+    // Currently jumps to BaseModel.__init__ — should jump to `class UserConfig`.
+    assert_eq!(
+        r#"
+# main.py
+8 | UserConfig(name="test", age=1)
+          ^
+Definition Result:
+3 |     def __init__(self, **kwargs: object) -> None: ...
+            ^^^^^^^^
+
+
+# models.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_constructor_dataclass_inheriting_init() {
+    // Dataclass inheriting from a base with explicit __init__: gotodef
+    // should jump to the class definition because the dataclass synthesizes
+    // its own __init__ which takes precedence over the inherited one.
+    let base_code = r#"
+class Base:
+    def __init__(self, **kwargs: object) -> None: ...
+"#;
+    let code = r#"
+from dataclasses import dataclass
+from .base_mod import Base
+
+@dataclass
+class Config(Base):
+    name: str
+    value: int
+
+Config(name="x", value=1)
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("base_mod", base_code)],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+10 | Config(name="x", value=1)
+         ^
+Definition Result:
+6 | class Config(Base):
+          ^^^^^^
+
+
+# base_mod.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_nested_typevar() {
+    // Even though accessing a typevar from an outer class is illegal, goto-def should still work.
+    let code = r#"
+class Outer[T]:
+    class Inner:
+        x: T
+#          ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+4 |         x: T
+               ^
+Definition Result:
+2 | class Outer[T]:
+                ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+/// When importing a name from a non-Python module (e.g. a .thrift file),
+/// go-to-definition on the imported name should navigate to the actual
+/// symbol definition in the source file, not just the top of the file.
+#[test]
+fn non_python_module_import_goto_symbol_test() {
+    let thrift_content =
+        "// This is a comment!\nstruct AggregatedAlertSpec {\n  1: string name\n}\n";
+    let main_code = r#"
+from aggregation_rule.thrift import AggregatedAlertSpec
+#                                   ^
+x = AggregatedAlertSpec
+#   ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // "from aggregation_rule.thrift import AggregatedAlertSpec"
+    //                                      ^
+    let import_name_pos = positions[0];
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, import_name_pos)
+        .expect("go-to-definition should return a result for non-Python imports");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // The definition range should point to "AggregatedAlertSpec" (19 chars)
+    // in the thrift file at byte offset 7..26 (after "struct "), not just the
+    // start of the file.
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(29), TextSize::new(48)),
+        "should point to the symbol name, not the start of file. Got: {report}",
+    );
+
+    // Test positions:
+    // "from aggregation_rule.thrift import AggregatedAlertSpec"
+    // "x = AggregatedAlertSpec
+    //      ^
+    // For non-Python modules, go-to-definition on a name usage should jump
+    // through the import to the symbol in the source file.
+    let use_name_pos = positions[1];
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, use_name_pos)
+        .expect("go-to-definition should return a result for non-Python imports");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(29), TextSize::new(48)),
+        "should point to the symbol name, not the start of file. Got: {report}",
+    );
+}
+
+/// When accessing an attribute on a non-Python module (e.g. thrift_mod.AggregatedAlertSpec),
+/// go-to-definition should fall back to navigating to the module file.
+#[test]
+fn non_python_module_attribute_fallback_test() {
+    let thrift_content = "";
+    let main_code = r#"
+import aggregation_rule.thrift as thrift_mod
+x = thrift_mod.AggregatedAlertSpec
+#              ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for non-Python module attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    assert_eq!(defs[0].range, TextRange::empty(TextSize::new(0)));
+}
+
+/// When accessing a nested attribute on a non-Python module
+/// (e.g. thrift_mod.MyEnum.VARIANT), go-to-definition on the member should
+/// navigate to the module source file via text search.
+#[test]
+fn non_python_module_nested_attribute_test() {
+    let thrift_content = "enum Targeting {\n  CUSTOM_AUDIENCES = 0,\n  INTERESTS = 1,\n}\n\nstruct Foo {\n  1: string INTERESTS;\n}\n";
+    let main_code = r#"
+import aggregation_rule.thrift as thrift_mod
+x = thrift_mod.Targeting.CUSTOM_AUDIENCES
+#                        ^
+y = thrift_mod.Targeting.INTERESTS
+#                        ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // "thrift_mod.Targeting.CUSTOM_AUDIENCES"
+    //                       ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for nested non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "CUSTOM_AUDIENCES" appears at byte offset 19..35 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(19), TextSize::new(35)),
+        "should point to CUSTOM_AUDIENCES in the .thrift file. Got: {report}",
+    );
+
+    // "thrift_mod.Targeting.INTERESTS"
+    //                       ^
+    // "INTERESTS" appears twice in the thrift content (as an enum value and
+    // a struct field name). find_symbol_range_in_text returns the first
+    // whole-word occurrence.
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition should return a result for nested non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // First occurrence of "INTERESTS" is the enum value at byte offset 43..52
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(43), TextSize::new(52)),
+        "should point to first INTERESTS in the .thrift file. Got: {report}",
+    );
+}
+
+/// When a name is imported from a non-Python module via `from ... import Name`
+/// and used in attribute access (`Name.MEMBER`), go-to-definition on the
+/// attribute should navigate to the symbol in the non-Python source file.
+#[test]
+fn non_python_module_from_import_attribute_test() {
+    let thrift_content = "enum Targeting {\n  CUSTOM_AUDIENCES = 0,\n  INTERESTS = 1,\n}\n";
+    let main_code = r#"
+from aggregation_rule.thrift import Targeting
+x = Targeting.CUSTOM_AUDIENCES
+#             ^
+y = Targeting.INTERESTS
+#             ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "aggregation_rule.thrift",
+        "aggregation_rule.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // "Targeting.CUSTOM_AUDIENCES"
+    //            ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for from-imported non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "CUSTOM_AUDIENCES" appears at byte offset 19..35 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(19), TextSize::new(35)),
+        "should point to CUSTOM_AUDIENCES in the .thrift file. Got: {report}",
+    );
+
+    // "Targeting.INTERESTS"
+    //            ^
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition should return a result for from-imported non-Python attribute");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("aggregation_rule.thrift"),
+        "should navigate to the .thrift file, got: {report}",
+    );
+    // "INTERESTS" appears at byte offset 43..52 in the thrift content
+    assert_eq!(
+        defs[0].range,
+        TextRange::new(TextSize::new(43), TextSize::new(52)),
+        "should point to INTERESTS in the .thrift file. Got: {report}",
+    );
+}
+
+/// When clicking on a filename component in a non-Python module import
+/// (e.g. `TranslationCheckConfig` in `from pkg.TranslationCheckConfig.thrift import XYZ`),
+/// go-to-definition should navigate to the file, not fail because the truncated
+/// module name `pkg.TranslationCheckConfig` doesn't resolve on its own.
+#[test]
+fn non_python_module_import_filename_component_test() {
+    let thrift_content = "struct Config {\n  1: string name\n}\n";
+    let main_code = r#"
+from translation.TranslationCheckConfig.thrift import Config
+#                 ^                      ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    test_env.add_with_path(
+        "translation.TranslationCheckConfig.thrift",
+        "translation/TranslationCheckConfig.thrift",
+        thrift_content,
+    );
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    // Clicking on `TranslationCheckConfig`
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition on filename component should navigate to the module file");
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("TranslationCheckConfig.thrift"),
+        "should navigate to the .thrift file, got: {}",
+        defs[0].module.path(),
+    );
+
+    // Clicking on `thrift` (the extension component) should also work
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[1])
+        .expect("go-to-definition on extension component should navigate to the module file");
+    assert!(
+        defs[0]
+            .module
+            .path()
+            .to_string()
+            .contains("TranslationCheckConfig.thrift"),
+        "should navigate to the .thrift file, got: {}",
+        defs[0].module.path(),
+    );
+}
+
+/// Go-to-definition on a __files__ directory import should fall back to
+/// the parent module when the virtual __files__ module doesn't exist on disk.
+#[test]
+fn files_directory_import_goto_definition_test() {
+    let main_code = r#"
+import foo.bar.__files__ as files
+#                ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new();
+    test_env.add("foo.bar", "x = 1\n");
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for __files__ import");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0].module.path().to_string().contains("foo/bar"),
+        "should navigate to the parent module foo.bar, got: {report}",
+    );
+}
+
+/// Go-to-definition on a __recursefiles__ directory import should fall back to
+/// the parent module when the virtual __recursefiles__ module doesn't exist on disk.
+#[test]
+fn recursefiles_directory_import_goto_definition_test() {
+    let main_code = r#"
+import foo.bar.__recursefiles__ as files
+#                   ^
+"#;
+    let positions = extract_cursors_for_test(main_code);
+    let mut test_env = TestEnv::new();
+    test_env.add("foo.bar", "x = 1\n");
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+
+    let defs = state
+        .transaction()
+        .goto_definition(&main_handle, positions[0])
+        .expect("go-to-definition should return a result for __recursefiles__ import");
+    let report = defs
+        .iter()
+        .map(|d| format!("module={}, range={:?}", d.module.path(), d.range))
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(
+        !defs.is_empty(),
+        "go-to-definition should return a non-empty result"
+    );
+    assert!(
+        defs[0].module.path().to_string().contains("foo/bar"),
+        "should navigate to the parent module foo.bar, got: {report}",
+    );
+}
+
+/// Check a `main.py` containing `code` in a project whose interpreter standard library
+/// directory, `<root>/stdlib`, contains `stdlib_files`.
+fn state_with_interpreter_stdlib(
+    stdlib_files: &[(&str, &str)],
+    code: &str,
+) -> (TempDir, State, Handle) {
+    let root = TempDir::new().unwrap();
+    let stdlib = root.path().join("stdlib");
+    for (path, contents) in stdlib_files {
+        let path = stdlib.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+    let main_path = root.path().join("main.py");
+    fs::write(&main_path, code).unwrap();
+
+    let mut config = ConfigFile::default();
+    config.interpreters.skip_interpreter_query = true;
+    config.python_environment.interpreter_stdlib_path = vec![stdlib];
+    config.configure();
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let mut transaction = state.new_committable_transaction(Require::Everything, None);
+    transaction
+        .as_mut()
+        .run(slice::from_ref(&handle), Require::Everything, None);
+    state.commit_transaction(transaction, None);
+    (root, state, handle)
+}
+
+#[test]
+fn definition_in_interpreter_stdlib_goes_to_source() {
+    let code = "from pathlib import Path\nx = Path\n#   ^\nPath.home\n#     ^\n";
+    let (root, state, handle) = state_with_interpreter_stdlib(
+        &[(
+            "pathlib.py",
+            "class Path:\n    @classmethod\n    def home(cls): pass\n",
+        )],
+        code,
+    );
+    let transaction = state.transaction();
+    let positions = extract_cursors_for_test(code);
+
+    for (position, name) in positions.iter().zip(["Path", "home"]) {
+        let definitions = transaction.goto_definition(&handle, *position).unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(
+            definitions[0].module.path().as_path(),
+            root.path().join("stdlib/pathlib.py")
+        );
+        assert_eq!(definitions[0].module.code_at(definitions[0].range), name);
+
+        // Glean prefers source files but must target files inside the project, so a
+        // source-preferring lookup searches the interpreter's standard library only if it
+        // opts in.
+        let definitions = transaction
+            .find_definition(
+                &handle,
+                *position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+        assert_eq!(
+            definitions[0]
+                .module
+                .code_at(definitions[0].definition_range),
+            name
+        );
+    }
+
+    let type_definitions = transaction
+        .goto_type_definition(&handle, positions[0])
+        .unwrap();
+    assert_eq!(type_definitions.len(), 1);
+    assert_eq!(
+        type_definitions[0].module.path().style(),
+        ModuleStyle::Interface,
+    );
+    assert_eq!(
+        type_definitions[0].module.name(),
+        ModuleName::from_str("pathlib")
+    );
+    assert_eq!(
+        type_definitions[0]
+            .module
+            .code_at(type_definitions[0].range),
+        "Path",
+    );
+}
+
+// The runtime `os` module re-exports `getcwd` from `posix` with `from posix import *`, while
+// typeshed's `posix.pyi` re-exports `getcwd` from `os`. Following re-exports from the source
+// therefore leads back to `os.py`.
+#[test]
+fn definition_of_name_reexported_in_cycle_goes_to_stub() {
+    let code = "import os\nfrom os import getcwd\nos.getcwd\n#   ^\ngetcwd\n# ^\n";
+    let (_root, state, handle) =
+        state_with_interpreter_stdlib(&[("os.py", "from posix import *\n")], code);
+    let transaction = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        let definitions = transaction
+            .goto_definition(&handle, position)
+            .unwrap_or_default();
+        assert_eq!(definitions.len(), 1, "got {definitions:?}");
+        assert_eq!(definitions[0].module.name(), ModuleName::from_str("os"));
+        assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+        assert_eq!(
+            definitions[0].module.code_at(definitions[0].range),
+            "getcwd"
+        );
+    }
+}
+
+// The runtime `datetime` module defines nothing itself: it star-imports `_datetime`, which is a
+// C module without a stub, and lists the imported names in `__all__`.
+#[test]
+fn definition_of_name_only_listed_in_dunder_all_goes_to_stub() {
+    let code = "import datetime\ndatetime.datetime\n#        ^\n";
+    let (_root, state, handle) = state_with_interpreter_stdlib(
+        &[(
+            "datetime.py",
+            "from _datetime import *\n__all__ = (\"datetime\",)\n",
+        )],
+        code,
+    );
+    let position = extract_cursors_for_test(code)[0];
+    let definitions = state
+        .transaction()
+        .goto_definition(&handle, position)
+        .unwrap_or_default();
+    assert_eq!(definitions.len(), 1, "got {definitions:?}");
+    assert_eq!(
+        definitions[0].module.name(),
+        ModuleName::from_str("datetime")
+    );
+    assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+    assert_eq!(
+        definitions[0].module.code_at(definitions[0].range),
+        "datetime"
+    );
+}
+
+#[test]
+fn attribute_of_object_class() {
+    let code = r#"
+object.__setattr__
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def __setattr__"),
+        "missing definition of `object.__setattr__`:\n{report}"
     );
 }

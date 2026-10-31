@@ -1,7 +1,7 @@
 from _typeshed import ConvertibleToFloat, ConvertibleToInt, Unused
 from collections.abc import Iterable
-from typing import Any, ClassVar, Literal, NoReturn, overload
-from typing_extensions import TypeAlias
+from typing import Any, ClassVar, Literal, TypeAlias, overload
+from typing_extensions import Never
 
 from openpyxl.descriptors import Strict
 from openpyxl.descriptors.base import Bool, Convertible, Descriptor, Float, Integer, MinMax, NoneSet, Set, String
@@ -36,6 +36,7 @@ class Nested(Descriptor[_T]):
     def __get__(self, instance: Serialisable | Strict, cls: type | None) -> _T: ...
     def __set__(self, instance: Serialisable | Strict, value: _HasTagAndGet[_T] | _T) -> None: ...
     def from_tree(self, node: _HasGet[_T]) -> _T: ...
+
     @overload
     def to_tree(self, tagname: Unused = None, value: None = None, namespace: Unused = None) -> None: ...
     @overload
@@ -58,10 +59,12 @@ class NestedValue(Nested[_T], Convertible[_T, _N]):  # type: ignore[misc]
         expected_type: _ExpectedTypeParam[_T],
         allow_none: Literal[False] = False,
     ) -> None: ...
+
     @overload
     def __get__(self: NestedValue[_T, Literal[True]], instance: Serialisable | Strict, cls: type | None = None) -> _T | None: ...
     @overload
     def __get__(self: NestedValue[_T, Literal[False]], instance: Serialisable | Strict, cls: type | None = None) -> _T: ...
+
     # NOTE: It is currently impossible to make a generic based on the parameter type of another generic
     # So we implement explicitly the types used internally
     # str | Blip
@@ -129,10 +132,12 @@ class NestedText(NestedValue[_T, _N]):
         expected_type: _ExpectedTypeParam[_T],
         allow_none: Literal[False] = False,
     ) -> None: ...
+
     @overload
     def __get__(self: NestedText[_T, Literal[True]], instance: Serialisable | Strict, cls: type | None = None) -> _T | None: ...
     @overload
     def __get__(self: NestedText[_T, Literal[False]], instance: Serialisable | Strict, cls: type | None = None) -> _T: ...
+
     # NOTE: It is currently impossible to make a generic based on the parameter type of another generic
     # So we implement explicitly the types used internally
     # str
@@ -149,11 +154,13 @@ class NestedText(NestedValue[_T, _N]):
     def __set__(self: NestedText[int, Literal[False]], instance: Serialisable | Strict, value: ConvertibleToInt) -> None: ...
     # If expected type (_T) is not str, it's impossible to use an Element as the value
     @overload
-    def __set__(self: NestedText[_T, Literal[True]], instance: Serialisable | Strict, value: _HasTagAndGet[Any]) -> NoReturn: ...
+    def __set__(self: NestedText[_T, Literal[True]], instance: Serialisable | Strict, value: _HasTagAndGet[Any]) -> Never: ...
     # Anything else
     @overload
     def __set__(self: NestedText[_T, Literal[True]], instance: Serialisable | Strict, value: _T | int | Any | None) -> None: ...
+
     def from_tree(self, node: _HasText) -> str: ...  # type: ignore[override]
+
     @overload
     def to_tree(self, tagname: Unused = None, value: None = None, namespace: Unused = None) -> None: ...
     @overload
@@ -182,6 +189,7 @@ class NestedBool(NestedValue[bool, _N], Bool[_N]):  # type: ignore[misc]
     def __init__(self: NestedBool[Literal[True]], name: str | None = None, *, allow_none: Literal[True]) -> None: ...
     @overload
     def __init__(self: NestedBool[Literal[False]], name: str | None = None, *, allow_none: Literal[False] = False) -> None: ...
+
     def __set__(self, instance: Serialisable | Strict, value: _HasTagAndGet[_ConvertibleToBool] | _ConvertibleToBool) -> None: ...
     def from_tree(self, node: _HasGet[bool]) -> bool: ...
 
@@ -192,7 +200,7 @@ class NestedNoneSet(Nested[_T | None], NoneSet[_T]):
 class NestedSet(Nested[_T], Set[_T]):
     def __init__(self, name: str | None = None, *, values: Iterable[_T]) -> None: ...
 
-class NestedMinMax(Nested[_M], MinMax[_M, _N]):  # type: ignore[misc]
+class NestedMinMax(Nested[_M], MinMax[_M, _N]):  # type: ignore[misc]  # pyrefly: ignore [inconsistent-inheritance]
     @overload
     def __init__(
         self: NestedMinMax[int, Literal[True]],
@@ -230,10 +238,12 @@ class NestedMinMax(Nested[_M], MinMax[_M, _N]):  # type: ignore[misc]
         min: float,
         max: float,
     ) -> None: ...
+
     @overload
     def __get__(self: NestedMinMax[_M, Literal[True]], instance: Serialisable | Strict, cls: type | None = None) -> _M | None: ...
     @overload
     def __get__(self: NestedMinMax[_M, Literal[False]], instance: Serialisable | Strict, cls: type | None = None) -> _M: ...
+
     @overload  # type: ignore[override]  # Different restrictions
     def __set__(
         self: NestedMinMax[int, Literal[True]],
@@ -259,17 +269,20 @@ class NestedMinMax(Nested[_M], MinMax[_M, _N]):  # type: ignore[misc]
         value: _HasTagAndGet[ConvertibleToFloat] | ConvertibleToFloat,
     ) -> None: ...
 
-class EmptyTag(Nested[bool], Bool[_N]):  # type: ignore[misc]
+class EmptyTag(Nested[bool], Bool[_N]):  # type: ignore[misc]  # pyrefly: ignore [inconsistent-inheritance]
     @overload
     def __init__(self: EmptyTag[Literal[True]], name: str | None = None, *, allow_none: Literal[True]) -> None: ...
     @overload
     def __init__(self: EmptyTag[Literal[False]], name: str | None = None, *, allow_none: Literal[False] = False) -> None: ...
+
     @overload
     def __get__(self: EmptyTag[Literal[True]], instance: Serialisable | Strict, cls: type | None = None) -> bool | None: ...
     @overload
     def __get__(self: EmptyTag[Literal[False]], instance: Serialisable | Strict, cls: type | None = None) -> bool: ...
+
     def __set__(self, instance: Serialisable | Strict, value: _HasTagAndGet[_ConvertibleToBool] | _ConvertibleToBool) -> None: ...
     def from_tree(self, node: Unused) -> Literal[True]: ...
+
     @overload
     def to_tree(self, tagname: Unused = None, value: None = None, namespace: Unused = None) -> None: ...
     @overload

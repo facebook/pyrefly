@@ -1,7 +1,7 @@
 """This is a template module just for instruction."""
 
 import sys
-from typing import Any, ClassVar, final
+from typing import Any, final
 
 class Str(str): ...
 
@@ -25,13 +25,4 @@ def new() -> Xxo:
     """new() -> new Xx object"""
     ...
 
-if sys.version_info >= (3, 10):
-    class Error(Exception): ...
-
-else:
-    class error(Exception): ...
-
-    class Null:
-        __hash__: ClassVar[None]  # type: ignore[assignment]
-
-    def roj(b: Any, /) -> None: ...
+class Error(Exception): ...

@@ -88,3 +88,21 @@ total_sum_typed = Default.objects.aggregate(
 assert_type(total_sum_typed, dict[str, Any]) 
 "#,
 );
+
+// Mapping a union of Django field types to their Python types rebuilds the union through the
+// solver, so a literal is absorbed by the class the field maps to.
+django_testcase!(
+    test_field_union_absorbs_literal,
+    r#"
+from typing import reveal_type
+from django.db import models
+
+def flag() -> bool: ...
+
+class M(models.Model):
+    x = models.CharField(max_length=10) if flag() else "A"
+
+def probe(m: M) -> None:
+    reveal_type(m.x)  # E: revealed type: str
+"#,
+);

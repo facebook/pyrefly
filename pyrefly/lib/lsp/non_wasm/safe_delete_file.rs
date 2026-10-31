@@ -10,16 +10,14 @@ use std::collections::HashSet;
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
-use lsp_types::CodeActionOrCommand;
+use lsp_types::CodeActionResponse;
 use lsp_types::Command;
 use lsp_types::DeleteFile;
 use lsp_types::DeleteFileOptions;
-use lsp_types::DocumentChangeOperation;
-use lsp_types::DocumentChanges;
+use lsp_types::DocumentChange;
 use lsp_types::Location;
-use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
@@ -69,8 +67,8 @@ pub(crate) fn safe_delete_file_code_actions(
     capabilities: &ClientCapabilities,
     state: &State,
     transaction: &Transaction<'_>,
-    uri: &Url,
-) -> Option<Vec<CodeActionOrCommand>> {
+    uri: &Uri,
+) -> Option<Vec<CodeActionResponse>> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
     }
@@ -100,6 +98,9 @@ pub(crate) fn safe_delete_file_code_actions(
             delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
         ]);
     }
+    if transaction.is_depended_on_by_anything(&handle) {
+        return None;
+    }
 
     Some(vec![delete_file_code_action(
         format!("Safe delete file `{file_name}`"),
@@ -107,20 +108,20 @@ pub(crate) fn safe_delete_file_code_actions(
     )])
 }
 
-fn delete_file_code_action(title: String, uri: &Url) -> CodeActionOrCommand {
-    let operation = DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
+fn delete_file_code_action(title: String, uri: &Uri) -> CodeActionResponse {
+    let operation = DocumentChange::DeleteFile(DeleteFile {
         uri: uri.clone(),
         options: Some(DeleteFileOptions {
             recursive: Some(false),
             ignore_if_not_exists: Some(true),
-            annotation_id: None,
         }),
-    }));
-    CodeActionOrCommand::CodeAction(CodeAction {
+        annotation_id: None,
+    });
+    CodeActionResponse::CodeAction(CodeAction {
         title,
-        kind: Some(CodeActionKind::new("refactor.delete")),
+        kind: Some(CodeActionKind::Custom("refactor.delete".into())),
         edit: Some(WorkspaceEdit {
-            document_changes: Some(DocumentChanges::Operations(vec![operation])),
+            document_changes: Some(vec![operation]),
             ..Default::default()
         }),
         ..Default::default()
@@ -129,14 +130,15 @@ fn delete_file_code_action(title: String, uri: &Url) -> CodeActionOrCommand {
 
 fn find_usages_code_action(
     file_name: &str,
-    uri: &Url,
+    uri: &Uri,
     locations: Vec<Location>,
-) -> CodeActionOrCommand {
+) -> CodeActionResponse {
     let title = format!("Find usages of file `{file_name}`");
-    CodeActionOrCommand::CodeAction(CodeAction {
+    CodeActionResponse::CodeAction(CodeAction {
         title: title.clone(),
         command: Some(Command {
             title,
+            tooltip: None,
             command: "pyrefly.findFileUsages".to_owned(),
             arguments: Some(vec![json!({
                 "uri": uri,
@@ -185,7 +187,7 @@ fn collect_import_usage_locations(
         if visitor.ranges.is_empty() {
             continue;
         }
-        let Some(uri) = Url::from_file_path(module_info.path().as_path()).ok() else {
+        let Some(uri) = Uri::from_file_path(module_info.path().as_path()).ok() else {
             continue;
         };
         for range in visitor.ranges {

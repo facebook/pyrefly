@@ -1,0 +1,170 @@
+name: "Automation: Issue comments"
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Scenario'
+        required: true
+        type: choice
+        options: ['Claim (Dry Run)']
+      issue_number:
+        description: 'Issue number'
+        required: true
+        type: string
+      contributor:
+        description: 'GitHub username'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  claim-issue:
+    # issue_comment fires for both issues and PRs; only act on issues.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: issue-claim-${{ github.event.comment.user.login || inputs.contributor }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Assign or unassign commenter on "#claim" / "#unclaim"
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const dryRun = context.eventName === 'workflow_dispatch';
+            // Match "#claim" / "#unclaim" case-insensitively as whole words, so
+            // "#claims" / "#unclaiming" don't trigger. "#claim" does not match
+            // inside "#unclaim" (the char before "claim" there is "n", not "#").
+            const body = dryRun ? '#claim' : context.payload.comment.body || '';
+            const isUnclaim = /#unclaim\b/i.test(body);
+            const isClaim = /#claim\b/i.test(body);
+            if (!isClaim && !isUnclaim) {
+              console.log('No #claim/#unclaim command found, skipping');
+              return;
+            }
+
+            const user = dryRun ? context.payload.inputs.contributor.trim() : context.payload.comment.user.login;
+            const issue_number = dryRun ? Number(context.payload.inputs.issue_number) : context.payload.issue.number;
+            // Dry runs read facebook/pyrefly even when dispatched from a fork, so changes
+            // to this script can be tested on a fork branch against real issues.
+            const { owner, repo } = dryRun ? { owner: 'facebook', repo: 'pyrefly' } : context.repo;
+            const { data: targetIssue } = await github.rest.issues.get({ owner, repo, issue_number });
+            const assignees = (targetIssue.assignees || []).map(a => a.login);
+
+            if (dryRun) {
+              if (targetIssue.pull_request) {
+                throw new Error('Claim dry runs require an issue, not a pull request.');
+              }
+              core.summary.addHeading('Claim dry run')
+                .addCodeBlock(`Repository: ${owner}/${repo}\nIssue: #${issue_number}\nContributor: ${user}`);
+            }
+
+            const comment = async (text) => {
+              if (dryRun) {
+                console.log(`Dry run: ${text}`);
+                await core.summary.addHeading('Result', 2).addCodeBlock(text).write();
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number, body: text });
+              }
+            };
+
+            // #unclaim takes precedence: release the commenter's own assignment.
+            if (isUnclaim) {
+              if (!assignees.includes(user)) {
+                console.log(`${user} is not assigned to #${issue_number}, nothing to unclaim`);
+                await comment(`@${user} you're not currently assigned to this issue, so there's nothing to unclaim.`);
+                return;
+              }
+              await github.rest.issues.removeAssignees({ owner, repo, issue_number, assignees: [user] });
+              console.log(`Unassigned ${user} from #${issue_number}`);
+              await comment(`@${user} you've been unassigned from this issue. Thanks for letting us know! 👋`);
+              return;
+            }
+
+            // #claim: only assign when the issue is unclaimed.
+            if (assignees.includes(user)) {
+              console.log(`${user} already assigned to #${issue_number}`);
+              await comment(`@${user} this issue is already assigned to you. Have at it! 🚀`);
+              return;
+            }
+
+            if (assignees.length > 0) {
+              console.log(`#${issue_number} already claimed by ${assignees.join(', ')}`);
+              await comment(`@${user} this issue is already claimed by ${assignees.map(a => '@' + a).join(', ')}. Please coordinate with them before starting.`);
+              return;
+            }
+
+            // Open issues the commenter already holds, other than this one.
+            const claimed = (await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, assignee: user, state: 'open', per_page: 100,
+            })).filter(i => !i.pull_request && i.number !== issue_number);
+            const refs = (issues) => issues.map(i => `#${i.number}`).join(', ');
+            if (dryRun) {
+              core.summary.addCodeBlock(`Other open issues held: ${refs(claimed) || 'none'}`);
+            }
+
+            // Good first issues are reserved for newcomers, so hold one at a time.
+            const isGoodFirstIssue = (i) => i.labels.some(l => l.name === 'good first issue');
+            const claimedGoodFirstIssues = claimed.filter(isGoodFirstIssue);
+            if (isGoodFirstIssue(targetIssue) && claimedGoodFirstIssues.length > 0) {
+              console.log(`${user} already holds good first issue(s) ${refs(claimedGoodFirstIssues)}`);
+              await comment(`@${user} you can only claim one good first issue at a time, and you're already assigned to ${refs(claimedGoodFirstIssues)}.`);
+              return;
+            }
+
+            // Contributors who haven't had a PR merged can hold one issue at a time.
+            // PRs aren't merged on GitHub; they're imported and land on main as commits
+            // authored by the contributor, so look for one of those. Commit search only
+            // finds commits whose author email is linked to the contributor's GitHub
+            // account, so fall back to looking for a PR with the "Merged" label, which
+            // nearly all landed PRs receive.
+            if (claimed.length > 0) {
+              const hasResults = async (endpoint, q) => {
+                const { data } = await github.request(`GET /search/${endpoint}`, { q, per_page: 1 });
+                if (dryRun) {
+                  core.summary.addCodeBlock(`${endpoint} search: ${q}\nMatches: ${data.total_count}\nIncomplete: ${data.incomplete_results}`);
+                }
+                return data.total_count > 0;
+              };
+              const hasMergedPr =
+                await hasResults('commits', `repo:${owner}/${repo} author:${user}`)
+                || await hasResults('issues', `repo:${owner}/${repo} is:pr author:${user} label:Merged`);
+              if (!hasMergedPr) {
+                console.log(`No merged PR found for ${user}, who already holds ${refs(claimed)}`);
+                await comment(`@${user} we couldn't find a merged PR from you, and we only allow multiple simultaneous claims from repeat contributors. You're already assigned to ${refs(claimed)}.`);
+                return;
+              }
+            }
+
+            if (dryRun) {
+              await comment(`The claim rules allow @${user} to claim #${issue_number}. Assignment was not attempted.`);
+              return;
+            }
+
+            await github.rest.issues.addAssignees({ owner, repo, issue_number, assignees: [user] });
+
+            // GitHub silently ignores assignees who lack repo access, so verify the
+            // assignment actually took effect before confirming.
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number });
+            if (!(issue.assignees || []).some(a => a.login === user)) {
+              console.log(`Failed to assign ${user} to #${issue_number}`);
+              await comment(`@${user} I couldn't assign this issue to you automatically — GitHub only allows assigning users with repository access. A maintainer can assign you manually.`);
+              return;
+            }
+
+            console.log(`Assigned ${user} to #${issue_number}`);
+            await comment(`@${user} you've claimed this issue — it's now assigned to you. Thanks for picking it up! 🎉`);
+
+            // A claimed issue no longer needs triage.
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'needs-triage' });
+            } catch (error) {
+              // Label may not be present; nothing to remove.
+            }

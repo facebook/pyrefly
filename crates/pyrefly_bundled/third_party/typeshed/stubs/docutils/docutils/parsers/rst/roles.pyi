@@ -1,6 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final
-from typing_extensions import TypeAlias, deprecated
+from typing import Any, Final, TypeAlias
+from typing_extensions import deprecated
 
 import docutils.parsers.rst.states
 from docutils import nodes
@@ -102,7 +102,7 @@ def raw_role(
     content: Sequence[str] | None = None,
 ) -> tuple[list[Node], list[system_message]]: ...
 def code_role(
-    role: str,
+    role_name: str,
     rawtext: str,
     text: str,
     lineno: int,

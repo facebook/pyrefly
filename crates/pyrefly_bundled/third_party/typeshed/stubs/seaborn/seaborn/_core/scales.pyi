@@ -1,8 +1,8 @@
 from _typeshed import Incomplete
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar
-from typing_extensions import Self, TypeAlias
+from typing import Any, ClassVar, TypeAlias
+from typing_extensions import Self
 
 from matplotlib.axis import Ticker
 from matplotlib.scale import ScaleBase
@@ -66,7 +66,7 @@ class Continuous(ContinuousBase):
         formatter: Formatter | None = None,
         *,
         like: str | Callable[[float], str] | None = None,
-        base: int | None | Default = ...,
+        base: int | Default | None = ...,
         unit: str | None = None,
     ) -> Self: ...
 

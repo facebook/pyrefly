@@ -6,8 +6,9 @@
  */
 
 use itertools::Itertools;
+use lsp_types::ActiveParameter;
 use lsp_types::Documentation;
-use lsp_types::ParameterLabel;
+use lsp_types::ParameterInformationLabel;
 use lsp_types::SignatureHelp;
 use lsp_types::SignatureInformation;
 use pretty_assertions::assert_eq;
@@ -50,7 +51,7 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
                                 params
                                     .into_iter()
                                     .map(|p| match p.label {
-                                        ParameterLabel::Simple(s) => s,
+                                        ParameterInformationLabel::String(s) => s,
                                         _ => unreachable!(),
                                     })
                                     .join(", ")
@@ -59,6 +60,10 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
                             "".to_owned()
                         },
                         if let Some(active) = active_parameter {
+                            let active = match active {
+                                ActiveParameter::Int(i) => i.to_string(),
+                                ActiveParameter::Null => "null".to_owned(),
+                            };
                             format!(", active parameter = {active}")
                         } else {
                             "".to_owned()
@@ -218,7 +223,7 @@ foo(a=1, b="")
     let param_doc = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("a")),
         )
         .and_then(|param| param.documentation.as_ref())
         .expect("parameter documentation");
@@ -270,6 +275,37 @@ g(
         report.contains("parameters=[name: str, times: int = 1]"),
         "Expected signature help parameters, got: {report}"
     );
+}
+
+#[test]
+fn signature_help_separates_overloaded_callable_instance_signatures() {
+    let code = r#"
+from typing import Any, overload
+
+class Ufunc:
+    @overload
+    def __call__(self, x: int) -> int: ...
+    @overload
+    def __call__(self, x: str, y: str) -> str: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+power = Ufunc()
+power()
+#     ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let signature = state
+        .transaction()
+        .get_signature_help_at(
+            handles.get("main").unwrap(),
+            extract_cursors_for_test(code)[0],
+        )
+        .expect("signature help available");
+
+    assert_eq!(signature.signatures.len(), 2);
+    assert!(signature.signatures[0].label.contains("x: int"));
+    assert!(signature.signatures[1].label.contains("x: str, y: str"));
 }
 
 #[test]
@@ -504,7 +540,7 @@ foo(a=1, b="", c=True)
     let param_a_doc = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("a")),
         )
         .and_then(|param| param.documentation.as_ref())
         .expect("parameter a documentation");
@@ -518,7 +554,7 @@ foo(a=1, b="", c=True)
     let param_b = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("b")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("b")),
         )
         .expect("parameter b should exist");
     assert!(
@@ -615,7 +651,7 @@ foo.method(x=1, y="test")
 
     // Should not include 'self' in parameters
     let has_self = params.iter().any(
-        |param| matches!(&param.label, ParameterLabel::Simple(label) if label.contains("self")),
+        |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.contains("self")),
     );
     assert!(
         !has_self,
@@ -626,7 +662,7 @@ foo.method(x=1, y="test")
     let param_x = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("x")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("x")),
         )
         .expect("parameter x should exist");
 
@@ -669,7 +705,7 @@ foo(a=1, b="", c=True)
     let param_a_doc = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("a")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("a")),
         )
         .and_then(|param| param.documentation.as_ref())
         .expect("parameter a documentation");
@@ -680,7 +716,7 @@ foo(a=1, b="", c=True)
     let param_b_doc = params
         .iter()
         .find(
-            |param| matches!(&param.label, ParameterLabel::Simple(label) if label.starts_with("b")),
+            |param| matches!(&param.label, ParameterInformationLabel::String(label) if label.starts_with("b")),
         )
         .and_then(|param| param.documentation.as_ref())
         .expect("parameter b documentation");
@@ -770,7 +806,7 @@ greet()
 
     let name_param = params
         .iter()
-        .find(|p| matches!(&p.label, ParameterLabel::Simple(label) if label.starts_with("name")))
+        .find(|p| matches!(&p.label, ParameterInformationLabel::String(label) if label.starts_with("name")))
         .expect("name parameter should exist");
 
     if let Some(Documentation::MarkupContent(content)) = &name_param.documentation {

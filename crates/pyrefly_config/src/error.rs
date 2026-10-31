@@ -5,9 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -59,6 +61,11 @@ impl ErrorDisplayConfig {
 
     pub fn set_error_severity(&mut self, kind: ErrorKind, severity: Severity) {
         self.0.insert(kind, severity);
+    }
+
+    /// Sets the severity only if this error kind is not already explicitly configured.
+    pub fn set_default_severity(&mut self, kind: ErrorKind, severity: Severity) {
+        self.0.entry(kind).or_insert(severity);
     }
 
     /// Iterate over `(ErrorKind, Severity)` entries in this config.
@@ -152,21 +159,24 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ErrorConfig<'a> {
-    pub display_config: &'a ErrorDisplayConfig,
+    pub display_config: Cow<'a, ErrorDisplayConfig>,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
+    pub type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
 }
 
 impl<'a> ErrorConfig<'a> {
     pub fn new(
-        display_config: &'a ErrorDisplayConfig,
+        display_config: Cow<'a, ErrorDisplayConfig>,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     ) -> Self {
         Self {
             display_config,
             ignore_errors_in_generated_code,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
         }
     }
 }
@@ -174,6 +184,15 @@ impl<'a> ErrorConfig<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unknown_column_can_be_downgraded() {
+        for severity in [Severity::Warn, Severity::Ignore] {
+            let config =
+                ErrorDisplayConfig::new(HashMap::from([(ErrorKind::UnknownColumn, severity)]));
+            assert_eq!(config.severity(ErrorKind::UnknownColumn), severity);
+        }
+    }
 
     #[test]
     fn test_severity_parent_kind_fallback() {

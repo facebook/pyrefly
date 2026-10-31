@@ -16,7 +16,7 @@ objects support decompress() and flush().
 
 import sys
 from _typeshed import ReadableBuffer
-from typing import Any, Final, final, type_check_only
+from typing import Any, Final, SupportsIndex, final, type_check_only
 from typing_extensions import Self
 
 DEFLATED: Final = 8
@@ -74,7 +74,7 @@ class _Decompress:
     def flush(self, length: int = 16384, /) -> bytes: ...
     def copy(self) -> _Decompress: ...
 
-def adler32(data: ReadableBuffer, value: int = 1, /) -> int:
+def adler32(data: ReadableBuffer, value: SupportsIndex = 1, /) -> int:
     """
     Compute an Adler-32 checksum of data.
 
@@ -84,6 +84,9 @@ def adler32(data: ReadableBuffer, value: int = 1, /) -> int:
     The returned checksum is an integer.
     """
     ...
+
+if sys.version_info >= (3, 15):
+    def adler32_combine(adler1: int, adler2: int, len2: int, /) -> int: ...
 
 if sys.version_info >= (3, 11):
     def compress(data: ReadableBuffer, /, level: int = -1, wbits: int = 15) -> bytes:
@@ -131,7 +134,7 @@ def compressobj(
       containing subsequences that are likely to occur in the input data.
     """
     ...
-def crc32(data: ReadableBuffer, value: int = 0, /) -> int:
+def crc32(data: ReadableBuffer, value: SupportsIndex = 0, /) -> int:
     """
     Compute a CRC-32 checksum of data.
 
@@ -141,6 +144,10 @@ def crc32(data: ReadableBuffer, value: int = 0, /) -> int:
     The returned checksum is an integer.
     """
     ...
+
+if sys.version_info >= (3, 15):
+    def crc32_combine(crc1: int, crc2: int, len2: int, /) -> int: ...
+
 def decompress(data: ReadableBuffer, /, wbits: int = 15, bufsize: int = 16384) -> bytes:
     """
     Returns a bytes object containing the uncompressed data.

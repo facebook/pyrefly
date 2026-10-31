@@ -51,6 +51,18 @@ if sys.version_info[1] >= 6:
 else:
     C = int
 assert_type(C(), str)
+
+if sys.version_info.minor >= 6:
+    D = str
+else:
+    D = int
+assert_type(D(), str)
+
+if sys.version_info.major == 3:
+    E = str
+else:
+    E = int
+assert_type(E(), str)
 "#,
 );
 
@@ -76,11 +88,11 @@ from typing import assert_type
 if True:
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if False:
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -88,11 +100,11 @@ assert_type(Y(), int)
 if not(False):
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if not(True):
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -181,6 +193,87 @@ assert_type(Y(), int)
 );
 
 testcase!(
+    test_platform_ternary_linux,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+inverted: int = 0 if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+
+def condition() -> bool:
+    return False
+
+subprocess.CREATE_NO_WINDOW if condition() else 0  # E: No attribute `CREATE_NO_WINDOW` in module `subprocess`
+"#,
+);
+
+testcase!(
+    test_platform_ternary_windows,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+import subprocess
+import sys
+
+value: int = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else "not windows"
+inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_NO_WINDOW
+"#,
+);
+
+testcase!(
+    test_platform_ternary_walrus,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Literal, assert_type
+import sys
+
+(skipped_body := 1) if sys.platform == "win32" else (live_else := 2)
+(live_body := 3) if sys.platform == "linux" else (skipped_else := 4)
+assert_type(live_else, Literal[2])
+assert_type(live_body, Literal[3])
+
+(outer := ((nested_skipped := 1) if sys.platform == "win32" else (nested_live := 2)))
+assert_type(outer, Literal[2])
+assert_type(nested_live, Literal[2])
+
+[(comp_skipped_body := 1) if sys.platform == "win32" else (comp_live_else := 2) for _ in [0]]
+[(comp_live_body := 3) if sys.platform == "linux" else (comp_skipped_else := 4) for _ in [0]]
+[(comp_outer := ((comp_nested_skipped := 1) if sys.platform == "win32" else 2)) for _ in [0]]
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_orelse,
+    TestEnv::new_with_platform(PythonPlatform::windows()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = 1 if sys.platform == "win32" else (yield 2)
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+testcase!(
+    test_platform_ternary_yield_in_skipped_body,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Generator, assert_type
+import sys
+
+def gen() -> Generator[int, None, None]:
+    x = (yield 2) if sys.platform == "win32" else 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+testcase!(
     test_platform_membership,
     r#"
 from typing import assert_type
@@ -227,6 +320,26 @@ if os.name != "posix":
 else:
     Z = int
 assert_type(Z(), int)
+"#,
+);
+
+testcase!(
+    test_sys_version_release_level,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from typing import assert_type
+import sys
+if sys.version_info >= (3, 14, 0, "beta"):
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if sys.version_info < (3, 14, 0, "candidate", 1):
+    Y = str
+else:
+    Y = int
+assert_type(Y(), int)
 "#,
 );
 
@@ -308,6 +421,64 @@ class Kwargs(TypedDict, total=False):
 
 def f(**kwargs: Unpack[Kwargs]) -> None:
     assert_type(kwargs, Kwargs)
+"#,
+);
+
+testcase!(
+    test_version_guard_and_short_circuit,
+    r#"
+if False:
+    A = 3  # E: This code is unreachable
+
+if False:
+    B = 3  # E: This code is unreachable
+
+if False:
+    C = 3  # E: This code is unreachable
+
+
+def test_and_basic() -> None:
+    # `and` short-circuits on False: A in the condition and body are unreachable.
+    if False and A:
+        _ = A  # E: This code is unreachable
+
+def test_and_longer_chain() -> None:
+    # Both B and C are gated: the guard short-circuits before reaching them.
+    if False and B and C:
+        _ = B  # E: This code is unreachable
+        _ = C
+
+def test_and_three_guards() -> None:
+    # Three consecutive False guards in a single and-chain.
+    if False and A and B and C:
+        _ = A  # E: This code is unreachable
+        _ = B
+        _ = C
+
+def test_or_basic() -> None:
+    # `or` short-circuits when the left side is *true*. False on the left
+    # means the right side IS evaluated — the name is unknown.
+    if False or A:  # E: Could not find name `A`
+        pass
+
+def test_or_always_true_guard() -> None:
+    # True → right side is unreachable.
+    if True or A:
+        pass
+
+def test_or_longer_chain() -> None:
+    # Chain: first element is always-true, so B and C are never evaluated.
+    if True or B or C:
+        pass
+
+def test_and_body_unreachable() -> None:
+    # An `if False` body is also unreachable; accessing A inside it is fine.
+    if False:
+        _ = A  # E: This code is unreachable
+
+def test_no_guard_produces_error() -> None:
+    # Baseline: without any guard, accessing A must produce an error.
+    A  # E: Could not find name `A`
 "#,
 );
 
@@ -398,4 +569,117 @@ testcase!(
     test_python_3_7,
     TestEnv::new_with_version(PythonVersion::new(3, 7, 0)),
     "",
+);
+
+// https://github.com/facebook/pyrefly/issues/3756: a module-level `TYPE_CHECKING` constant is
+// treated as `True` by type checkers and `False` at runtime, so it must have type `bool`.
+testcase!(
+    test_type_checking_constant_bad_annotation,
+    r#"
+TYPE_CHECKING: str = ""  # E: TYPE_CHECKING
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_bad_value,
+    r#"
+TYPE_CHECKING = 1  # E: `TYPE_CHECKING` must have type `bool`
+"#,
+);
+
+// The canonical `from typing import TYPE_CHECKING` is an import, not an assignment, so it is fine.
+testcase!(
+    test_type_checking_constant_import_ok,
+    r#"
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    x: int = 1
+"#,
+);
+
+testcase!(
+    test_type_checking_constant_define_ok,
+    r#"
+TYPE_CHECKING = False
+TYPE_CHECKING_WITH_PYREFLY: bool = False
+"#,
+);
+
+// A local variable that merely shares the name is not the module-level constant, so don't flag it.
+testcase!(
+    test_type_checking_constant_local_ok,
+    r#"
+def f() -> None:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// We check the type is `bool`; we do not additionally require the value to be `False`, so a
+// `True` value (a runtime bug) is currently accepted.
+testcase!(
+    bug = "TYPE_CHECKING = True is a runtime bug but is not flagged (we only check the type)",
+    test_type_checking_constant_true_not_flagged,
+    r#"
+TYPE_CHECKING = True
+"#,
+);
+
+// A class attribute that merely shares the name is not the module-level sentinel.
+testcase!(
+    test_type_checking_constant_class_attr_ok,
+    r#"
+class C:
+    TYPE_CHECKING: str = ""
+"#,
+);
+
+// `TYPE_CHECKING_WITH_PYREFLY` is also recognized, so a bad definition is flagged too.
+testcase!(
+    test_type_checking_with_pyrefly_bad,
+    r#"
+TYPE_CHECKING_WITH_PYREFLY = 1  # E: must have type `bool`
+"#,
+);
+
+// Annotation-only declarations route through a different binding, so we don't check them yet.
+testcase!(
+    bug = "annotation-only `TYPE_CHECKING: str` (no value) is not yet flagged",
+    test_type_checking_constant_annotation_only_not_flagged,
+    r#"
+TYPE_CHECKING: str
+"#,
+);
+
+// Stub (`.pyi`) files have no runtime and conventionally initialize typing constants to placeholder
+// values (e.g. `TYPE_CHECKING = 1` in mypy's test fixtures), so the check is skipped there.
+testcase!(
+    test_type_checking_constant_stub_ok,
+    TestEnv::one_with_path("foo", "foo.pyi", "TYPE_CHECKING = 1"),
+    r#"
+import foo
+"#,
+);
+
+// A line continuation joins the walrus to the `if`, so the parser recovers a ternary
+// whose test `SysInfo` decides is false, and `q` is defined in the skipped branch.
+testcase!(
+    test_walrus_continued_into_statically_false_if,
+    r#"
+import sys
+
+# E: Invalid annotated assignment target
+(q := 1) \
+if sys.version_info >= (3, 99):  # E: Expected `else`, found `:` # E: Expected an expression
+    pass  # E: Unexpected indentation
+"#,
+);
+
+testcase!(
+    test_walrus_in_statically_decided_ternary,
+    r#"
+import sys
+y = (q := 1) if sys.version_info >= (3, 99) else 2
+z = 3 if sys.version_info >= (3, 0) else (r := 4)
+w = [(s := 5) if sys.version_info >= (3, 99) else 6 for _ in range(1)]
+"#,
 );

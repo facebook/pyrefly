@@ -21,6 +21,8 @@ export interface PyreflyErrorMessage {
     message_details: string;
     kind: string;
     severity: number;
+    // Monaco `MarkerTag`s: 1 is unnecessary (greyed out), 2 is deprecated (struck through).
+    tags: ReadonlyArray<number>;
     filename: string;
 }
 
@@ -88,8 +90,13 @@ function ErrorMessage({
             }
         >
             {
-                // We intentionally add a leading space to INFO and WARN so they visually line up with ERROR
-                error.severity == 2 ? (
+                // We intentionally add a leading space to HINT, INFO and WARN so they visually line up with ERROR
+                error.severity == 1 ? (
+                    <span {...stylex.props(styles.ErrorMessageInfo)}>
+                        {' '}
+                        HINT{' '}
+                    </span>
+                ) : error.severity == 2 ? (
                     <span {...stylex.props(styles.ErrorMessageInfo)}>
                         {' '}
                         INFO{' '}

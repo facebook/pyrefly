@@ -5,13 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::notification::DidChangeTextDocument;
+use lsp_types::DidChangeTextDocumentNotification;
+use lsp_types::Uri;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_text_document_did_change() {
@@ -27,9 +27,9 @@ fn test_text_document_did_change() {
     let filepath = root.path().join("text_document.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&filepath).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -44,9 +44,9 @@ fn test_text_document_did_change() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&filepath).unwrap().to_string(),
                 "languageId": "python",
                 "version": 3
             },
@@ -84,9 +84,9 @@ fn test_text_document_did_change_backwards_version() {
     // Send version 3 first (skipping version 2).
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&filepath).unwrap().to_string(),
                 "version": 3
             },
             "contentChanges": [{
@@ -101,9 +101,9 @@ fn test_text_document_did_change_backwards_version() {
     // Send version 2 (backwards!). The server should accept it.
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&filepath).unwrap().to_string(),
                 "version": 2
             },
             "contentChanges": [{
@@ -140,9 +140,9 @@ fn test_text_document_did_change_unicode() {
     let utf_filepath = root.path().join("utf.py");
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&utf_filepath).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },
@@ -158,9 +158,9 @@ fn test_text_document_did_change_unicode() {
 
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&utf_filepath).unwrap().to_string(),
+                "uri": Uri::from_file_path(&utf_filepath).unwrap().to_string(),
                 "languageId": "python",
                 "version": 3
             },

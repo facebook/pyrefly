@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping
 from types import TracebackType
-from typing import Literal, NamedTuple
-from typing_extensions import Self, TypeAlias
+from typing import Literal, NamedTuple, TypeAlias
+from typing_extensions import Self
 
 from tensorflow._aliases import DTypeLike, ShapeLike, TensorCompatible, TensorLike
 from tensorflow.io import gfile as gfile
@@ -92,8 +92,8 @@ class RaggedFeature(NamedTuple):
 
     dtype: DTypeLike
     value_key: str | None = None
-    partitions: tuple[  # type: ignore[name-defined]
-        RowSplits | RowLengths | RowStarts | RowLimits | ValueRowIds | UniformRowLength, ...
+    partitions: tuple[
+        RowSplits | RowLengths | RowStarts | RowLimits | ValueRowIds | UniformRowLength, ...  # type: ignore[name-defined]
     ] = ()
     row_splits_dtype: DTypeLike = ...
     validate: bool = False

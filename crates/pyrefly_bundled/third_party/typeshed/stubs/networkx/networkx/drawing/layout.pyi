@@ -1,10 +1,9 @@
 from collections.abc import Collection, Mapping
-from typing import Any, Literal
-from typing_extensions import TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 from networkx._typing import Array1D, Array2D, ArrayLike1D, Seed
-from networkx.classes.graph import Graph, _Node
+from networkx.classes.graph import Graph, _EdgeData, _Node, _NodeData
 from networkx.utils.backends import _dispatchable
 from numpy.typing import NDArray
 
@@ -30,17 +29,21 @@ __all__ = [
 _FloatArrayLike1D: TypeAlias = ArrayLike1D[float, np.number[Any]]  # Any because we don't care about the bit base
 
 def random_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     center: _FloatArrayLike1D | None = None,
     dim: int = 2,
     seed: Seed | None = None,
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float32]]: ...
 def circular_layout(
-    G: Graph[_Node], scale: float = 1, center: _FloatArrayLike1D | None = None, dim: int = 2, store_pos_as: str | None = None
+    G: Graph[_Node, _NodeData, _EdgeData],
+    scale: float = 1,
+    center: _FloatArrayLike1D | None = None,
+    dim: int = 2,
+    store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def shell_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     nlist: Collection[Collection[_Node]] | None = None,
     rotate: float | None = None,
     scale: float = 1,
@@ -49,7 +52,7 @@ def shell_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def bipartite_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     nodes: Collection[_Node] | None = None,
     align: Literal["vertical", "horizontal"] = "vertical",
     scale: float = 1,
@@ -58,7 +61,7 @@ def bipartite_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def spring_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     k: float | None = None,
     pos: Mapping[_Node, Collection[float]] | None = None,
     fixed: Collection[_Node] | None = None,
@@ -78,7 +81,7 @@ def spring_layout(
 fruchterman_reingold_layout = spring_layout
 
 def kamada_kawai_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     dist: Mapping[_Node, Mapping[_Node, float]] | None = None,
     pos: Mapping[_Node, Collection[float]] | None = None,
     weight: str | None = "weight",
@@ -88,7 +91,7 @@ def kamada_kawai_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def spectral_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     weight: str | None = "weight",
     scale: float = 1,
     center: _FloatArrayLike1D | None = None,
@@ -96,10 +99,14 @@ def spectral_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def planar_layout(
-    G: Graph[_Node], scale: float = 1, center: _FloatArrayLike1D | None = None, dim: int = 2, store_pos_as: str | None = None
+    G: Graph[_Node, _NodeData, _EdgeData],
+    scale: float = 1,
+    center: _FloatArrayLike1D | None = None,
+    dim: int = 2,
+    store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def spiral_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     scale: float = 1,
     center: _FloatArrayLike1D | None = None,
     dim: int = 2,
@@ -108,7 +115,7 @@ def spiral_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def multipartite_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     subset_key: str | Mapping[Any, Collection[_Node]] = "subset",  # layers can be "any" hashable
     align: Literal["vertical", "horizontal"] = "vertical",
     scale: float = 1,
@@ -116,7 +123,7 @@ def multipartite_layout(
     store_pos_as: str | None = None,
 ) -> dict[_Node, Array1D[np.float64]]: ...
 def arf_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     pos: Mapping[_Node, Collection[float]] | None = None,
     scaling: float = 1,
     a: float = 1.1,
@@ -129,7 +136,7 @@ def arf_layout(
 ) -> dict[_Node, Array1D[np.float32]]: ...
 @_dispatchable
 def forceatlas2_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     pos: Mapping[_Node, Collection[float]] | None = None,
     *,
     max_iter: int = 100,
@@ -149,7 +156,7 @@ def forceatlas2_layout(
 def rescale_layout(pos: NDArray[np.number[Any]], scale: float = 1) -> Array2D[np.float64]: ...  # ignore the bit base
 def rescale_layout_dict(pos: Mapping[_Node, Collection[float]], scale: float = 1) -> dict[_Node, Array1D[np.float64]]: ...
 def bfs_layout(
-    G: Graph[_Node],
+    G: Graph[_Node, _NodeData, _EdgeData],
     start: _Node,
     *,
     align: Literal["vertical", "horizontal"] = "vertical",

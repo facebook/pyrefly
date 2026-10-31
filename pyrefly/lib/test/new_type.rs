@@ -87,6 +87,12 @@ BadNewType3 = NewType("BadNewType3", Protocol)  # E: Second argument to NewType 
 BadNewType4 = NewType("BadNewType4", Generic[T])  # E: Second argument to NewType is invalid
 
 BadNewType5 = NewType("BadNewType5", Any)  # E: Second argument to NewType is invalid
+
+class Base:
+    pass
+
+DynamicBase: type[Base] | Any = Base
+BadNewType6 = NewType("BadNewType6", DynamicBase)  # E: Second argument to NewType is invalid
      "#,
 );
 
@@ -145,7 +151,7 @@ Thing = NewType("Thing", int)
 ThingType = type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
 OtherThingType = Type[Thing]  # E: NewType `Thing` is not a class and cannot be used with `type` or `Type`
 
-mapping: dict[int, ThingType] = {1: Thing}  # E: `dict[int, type[Thing]]` is not assignable to `dict[int, type[Any]]`
+mapping: dict[int, ThingType] = {1: Thing}  # E: `type[Thing]` is not assignable to dict value type `type[Any]`
 
 def func(x: ThingType) -> None: ...
 func(Thing)  # E: Argument `type[Thing]` is not assignable to parameter `x` with type `type[Any]` in function `func`
@@ -236,5 +242,40 @@ x = Inty((1,2))
 def f(v: tuple[int, int]):
     pass
 f(x)
+    "#,
+);
+
+testcase!(
+    test_newtype_abstract_base,
+    r#"
+from abc import ABC, abstractmethod
+from functools import partial
+from typing import Any, Mapping, NewType
+
+class AbstractClass(ABC):
+    @abstractmethod
+    def foo(self) -> None:
+        pass
+
+# NewType does not instantiate the underlying class, so using an abstract
+# class or interface (like Mapping) is valid.
+Message = NewType("Message", Mapping[str, Any])
+m: Message = Message({})
+
+NewAbstract = NewType("NewAbstract", AbstractClass)
+def bar(a: AbstractClass) -> None:
+    na: NewAbstract = NewAbstract(a)
+
+# Attempting to instantiate the underlying abstract class errors on AbstractClass(),
+# but NewAbstract itself does not error.
+_ = NewAbstract(AbstractClass())  # E: Cannot instantiate `AbstractClass` because the following members are abstract: `foo`
+
+# partial(NewType) is also valid and should not be treated as instantiating an abstract class.
+PartialMessage = partial(Message)
+pm: Message = PartialMessage({})
+
+PartialNewAbstract = partial(NewAbstract)
+def baz(a: AbstractClass) -> None:
+    pna: NewAbstract = PartialNewAbstract(a)
     "#,
 );

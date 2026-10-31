@@ -136,9 +136,11 @@ z: list[A] | list[B] = [B2() for _ in range(10)]
 testcase!(
     test_dict_union,
     r#"
+from typing import Sequence
 d1: dict[int, int] | dict[str, list[int]] = {"x": [True]}
 x: list[str] = []
 d2: dict[int, int] | dict[str, list[int]] = {k: [True] for k in x}
+d3: Sequence[dict[str, int]] | Sequence[dict[int, int]] = [{"x": 1}]
     "#,
 );
 
@@ -208,14 +210,96 @@ testcase!(
     r#"
 from typing import Iterable, MutableMapping, Literal
 x1: dict[str, int] = {"a": 1}
-x2: dict[str, int] = {"a": "oops"}  # E: `dict[str, str]` is not assignable to `dict[str, int]`
-x3: dict[str, Literal[1]] = {"a": 2} # E: `dict[str, int]` is not assignable to `dict[str, Literal[1]]`
+x2: dict[str, int] = {"a": "oops"}  # E: `Literal['oops']` is not assignable to dict value type `int`
+x3: dict[str, Literal[1]] = {"a": 2} # E: `Literal[2]` is not assignable to dict value type `Literal[1]`
 x4: MutableMapping[str, int] = {"a": 1}
 x5: Iterable[str] = {"a": 1}
-x6: Iterable[int] = {"oops": 1}  # E: `dict[str, int]` is not assignable to `Iterable[int]`
+x6: Iterable[int] = {"oops": 1}  # E: `Literal['oops']` is not assignable to dict key type `int`
 x7: Iterable[Literal[4]] = {4: "a"}
 x8: object = {"a": 1}
 x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
+    "#,
+);
+
+// The `Any` in a type variable's bound carries no information about the literal, so a non-empty
+// list infers its own element type. An empty list has nothing to infer from and keeps the bound.
+testcase!(
+    test_any_bounded_typevar_list_hint,
+    r#"
+from typing import Any, assert_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+assert_type(keep([0]), list[int])
+assert_type(keep([x for x in [0]]), list[int])
+assert_type(keep([]), list[Any])
+    "#,
+);
+
+testcase!(
+    test_any_bounded_typevar_nested_empty_literal,
+    r#"
+from typing import Any, reveal_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+reveal_type(keep([[]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([[], [1]]))  # E: revealed type: list[list[int] | list[Any]]
+reveal_type(keep([[] for _ in [0]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([set()]))  # E: revealed type: list[set[Any]]
+reveal_type(keep([list()]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([{}]))  # E: revealed type: list[dict[Any, Any]]
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3265
+// Any in a bound should preserve the concrete element types asserted below.
+testcase!(
+    bug = "Any bounds erase inferred container element types",
+    test_any_bounded_typevar_container_hints,
+    r#"
+from typing import Any, Iterator, Protocol, assert_type
+
+def keep_set[T: set[Any]](x: T) -> T: ...
+def keep_dict[T: dict[Any, Any]](x: T) -> T: ...
+assert_type(keep_set({0}), set[int])  # E: assert_type(set[Any], set[int]) failed
+assert_type(keep_set({x for x in [0]}), set[int])  # E: assert_type(set[Any], set[int]) failed
+assert_type(keep_dict({0: "a"}), dict[int, str])  # E: assert_type(dict[Any, Any], dict[int, str]) failed
+assert_type(keep_dict({x: str(x) for x in [0]}), dict[int, str])  # E: assert_type(dict[Any, Any], dict[int, str]) failed
+assert_type(keep_dict({}), dict[Any, Any])
+assert_type(keep_dict({0: []}), dict[int, list[Any]])  # E: assert_type(dict[Any, Any], dict[int, list[Any]]) failed
+
+class ReturnsIterator[T](Protocol):
+    def __iter__(self) -> T: ...
+
+def iterator[I: Iterator[Any]](x: ReturnsIterator[I]) -> I: ...
+assert_type(iterator([0]), Iterator[int])
+assert_type(iterator({0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+assert_type(iterator({0: "a"}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+
+# Concrete bounds and explicit Any annotations still supply contextual types.
+def floats[T: list[float]](x: T) -> T: ...
+def explicit(x: list[Any]) -> list[Any]: ...
+assert_type(floats([0]), list[float])
+assert_type(explicit([0]), list[Any])
+    "#,
+);
+
+// An unconstrained generic return should not narrow permanently from its first mutation.
+// Both appends should succeed, and xs should retain type list[Any].
+testcase!(
+    bug = "Repeated append over-narrows an empty generic list return",
+    test_any_bounded_typevar_empty_list_repeated_append,
+    r#"
+from typing import Any, assert_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+def f():
+    xs = keep([])
+    xs.append(1)
+    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]` in function `list.append`
+    assert_type(xs, list[Any])  # E: assert_type(list[Literal[1]] | list[Any], list[Any]) failed
     "#,
 );
 
@@ -225,8 +309,8 @@ testcase!(
 from typing import assert_type, Callable, Any
 def f(cb: Callable[[int], int]) -> None: ...
 def g(cb: Any) -> None: ...
-f(cb = lambda x: assert_type(x, int), cb = lambda x: assert_type(x, int))  # E: Multiple values for argument `cb` # E: Parse error
-g(cb = lambda x: assert_type(x, Any), cb = lambda x: assert_type(x, Any))  # E: Multiple values for argument `cb` # E: Parse error
+f(cb = lambda x: assert_type(x, int), cb = lambda x: assert_type(x, int))  # E: Multiple values for argument `cb` # E: Duplicate keyword argument `cb`
+g(cb = lambda x: assert_type(x, Any), cb = lambda x: assert_type(x, Any))  # E: Multiple values for argument `cb` # E: Duplicate keyword argument `cb`
     "#,
 );
 
@@ -368,6 +452,7 @@ class B: ...
 class B2(B): ...
 f1: Callable[[], list[B]] = lambda: [B2()]
 f2: Callable[[], list[A]] | Callable[[], list[B]] = lambda: [B2()]
+f3: Callable[[], dict[int, A]] | Callable[[], dict[int, B]] = lambda: {0: B2()}
 "#,
 );
 
@@ -422,15 +507,16 @@ reveal_type(x2) # E: revealed type: (x: int, y: str) -> None
 );
 
 testcase!(
-    bug = "We should contextually type *args and **kwargs here based on the paramspec",
     test_context_lambda_paramspec_args_kwargs,
     r#"
 from typing import Callable, assert_type
 def f[**P, R](f: Callable[P, R], g: Callable[P, R]) -> Callable[P, R]: ...
 def g1(x: int, *args: int): ...
 def g2(x: int, **kwargs: str): ...
-x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...])) # E: assert_type(Unknown, tuple[int, ...]) failed
-x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str])) # E: assert_type(Unknown, dict[str, str]) failed
+x1 = f(g1, lambda x, *args: assert_type(args, tuple[int, ...]))
+x2 = f(g2, lambda x, **kwargs: assert_type(kwargs, dict[str, str]))
+assert_type(x1(0), None | tuple[int, ...])
+assert_type(x2(0), None | dict[str, str])
     "#,
 );
 
@@ -562,7 +648,7 @@ class A: ...
 class B(A): ...
 x: list[A]
 y: list[B]
-x = y = [B()]  # E: Wrong type for assignment, expected `list[A]` and got `list[B]`
+x = y = [B()]  # E: `list[B]` is not assignable to `list[A]`
     "#,
 );
 
@@ -704,14 +790,13 @@ x: Identity = lambda x: x
 );
 
 testcase!(
-    bug = "We should contextually type *args and **kwargs here based on the Protocol",
     test_context_lambda_args_kwargs_protocol,
     r#"
 from typing import Protocol, assert_type, Any
 class Identity(Protocol):
     def __call__(self, *args: int, **kwargs: int) -> Any: ...
-x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...]) # E: assert_type(Unknown, tuple[int, ...]) failed
-y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int]) # E: assert_type(Unknown, dict[str, int]) failed
+x: Identity = lambda *args, **kwargs: assert_type(args, tuple[int, ...])
+y: Identity = lambda *args, **kwargs: assert_type(kwargs, dict[str, int])
     "#,
 );
 
@@ -838,20 +923,63 @@ f(list())
     "#,
 );
 
+// Regression: a list/set literal against `Alias | Collection[Alias]`, where the
+// `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
+// Flattening the alias used to cause the literal to fall back to `list[str]`.
 testcase!(
-    // Regression: when a TypeVar's only constraints are upper bounds, multiple
-    // such bounds where one is a subtype of the other must collapse to the
-    // *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
-    // type for both lower and upper bounds, which is correct for lower bounds
-    // but throws away the tighter constraint for upper bounds.
-    //
-    // Here `f(bar)` against return hint `int | Callable[[], int]` records:
-    //   T <: int                  (from callback contravariance)
-    //   T <: int                  (from `() -> T` arm matching `() -> int`)
-    //   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
-    // No lower bounds. Without the fix, the wider union wins and the call's
-    // return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
-    // spurious bad-return. With the fix, T solves to `int` and the return matches.
+    test_list_hint_with_wide_literal_alias_union,
+    r#"
+from typing import Literal, TypeAlias
+from collections.abc import Collection
+L: TypeAlias = Literal["a", "b", "c", "d", "e", "f", "g", "h"]
+def f(*, x: L | Collection[L] = "a") -> None: ...
+f(x=["a", "b"])
+f(x={"a", "b"})
+f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
+    "#,
+);
+
+// Regression: a generic call's return TypeVar solved against a wide Literal hint used to
+// discard the hint entirely, falling back to the argument's own widened type (e.g. `str`
+// instead of the Literal). Wide call hints are tried as a combined union rather than by
+// enumerating every member.
+testcase!(
+    test_call_hint_with_wide_literal_union,
+    r#"
+from typing import Literal, TypeVar
+
+T = TypeVar("T")
+
+def identity(x: T) -> T:
+    return x
+
+BigLit = Literal["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"]
+v: BigLit = identity("a")
+
+def takes_big_lit(x: BigLit) -> None: ...
+takes_big_lit(identity("a"))
+
+def returns_big_lit() -> BigLit:
+    return identity("a")
+
+bad: BigLit = identity("z")  # E: `str` is not assignable
+    "#,
+);
+
+// Regression: when a TypeVar's only constraints are upper bounds, multiple
+// such bounds where one is a subtype of the other must collapse to the
+// *narrowest* one. Previously `get_new_bound`'s absorb logic kept the wider
+// type for both lower and upper bounds, which is correct for lower bounds
+// but throws away the tighter constraint for upper bounds.
+//
+// Here `f(bar)` against return hint `int | Callable[[], int]` records:
+//   T <: int                  (from callback contravariance)
+//   T <: int                  (from `() -> T` arm matching `() -> int`)
+//   T <: int | Callable[[], int]  (from bare `T` arm matching the hint)
+// No lower bounds. Without the fix, the wider union wins and the call's
+// return becomes `(int | () -> int) | () -> (int | () -> int)`, producing a
+// spurious bad-return. With the fix, T solves to `int` and the return matches.
+testcase!(
     test_typevar_upper_bound_narrowing,
     r#"
 from typing import Callable, TypeVar
@@ -863,4 +991,82 @@ def bar(x: int) -> None: ...
 def make() -> int | Callable[[], int]:
     return f(bar)
     "#,
+);
+
+testcase!(
+    test_typeddict_in_lambda,
+    r#"
+from typing import Callable, TypedDict
+
+class A: ...
+class B: ...
+class B2(B): ...
+
+class DA(TypedDict):
+    x: A
+
+class DB(TypedDict):
+    x: B
+
+f: Callable[[], DA] | Callable[[], DB] = lambda: {"x": B2()}
+    "#,
+);
+
+testcase!(
+    test_nested_typeddict_in_union,
+    r#"
+from typing import TypedDict
+
+class A(TypedDict):
+    x: int
+
+class B(TypedDict, total=False):
+    x: str
+
+type X = list[A] | list[B]
+
+x1: X = [{"x": ""}]
+x2: X = [{}]
+x3: X = [{"x": 1.0}]  # E: `float` is not assignable to TypedDict key `x` with type `int`
+    "#,
+);
+
+// Regression: a union return hint is tried one member at a time, and a rejected
+// member (here `None`) can fix the `key` lambda's parameter to the wrong type and
+// make `x.n` fail. That error belongs to the rejected member and must not leak
+// into the accepted result, which types `x` as `C` from the iterable.
+testcase!(
+    test_max_key_lambda_with_default_and_union_hint,
+    r#"
+class C:
+    n: int
+
+def with_max(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.n, default=None)
+
+def with_min(xs: list[C]) -> C | None:
+    return min(xs, key=lambda x: x.n, default=None)
+
+def with_annotated_local(xs: list[C]) -> None:
+    best: C | None = max(xs, key=lambda x: x.n, default=None)
+
+def with_non_none_sentinel(xs: list[C]) -> C | str:
+    return max(xs, key=lambda x: x.n, default="sentinel")
+
+def with_other_error_kind(rows: list[list[int]]) -> list[int] | None:
+    return max(rows, key=lambda r: r[0], default=None)
+"#,
+);
+
+// A genuine error in a `key` lambda body is still reported: only errors from
+// rejected hint members are discarded, not those from the accepted member.
+testcase!(
+    test_max_key_lambda_real_error_still_reported,
+    r#"
+class C:
+    n: int
+
+def f(xs: list[C]) -> C | None:
+    return max(xs, key=lambda x: x.missing, default=None)  # E: Object of class `C` has no attribute `missing`
+"#,
 );

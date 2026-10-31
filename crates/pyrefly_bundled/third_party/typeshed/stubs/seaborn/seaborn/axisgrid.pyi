@@ -1,8 +1,8 @@
 import os
 from _typeshed import Incomplete
 from collections.abc import Callable, Generator, Iterable, Mapping
-from typing import IO, Any, Literal, TypeVar
-from typing_extensions import Concatenate, ParamSpec, Self, TypeAlias, deprecated
+from typing import IO, Any, Concatenate, Literal, ParamSpec, TypeAlias, TypeVar
+from typing_extensions import Self, deprecated
 
 import numpy as np
 from matplotlib.artist import Artist
@@ -74,16 +74,16 @@ class _BaseGrid:
         transform: Transform | None = ...,
         url: str | None = ...,
         visible: bool = ...,
-        xbound: float | None | tuple[float | None, float | None] = ...,
+        xbound: float | tuple[float | None, float | None] | None = ...,
         xlabel: str = ...,
-        xlim: float | None | tuple[float | None, float | None] = ...,
+        xlim: float | tuple[float | None, float | None] | None = ...,
         xmargin: float = ...,
         xscale: str | ScaleBase = ...,
         xticklabels: Iterable[str | Text] = ...,
         xticks: ArrayLike = ...,
-        ybound: float | None | tuple[float | None, float | None] = ...,
+        ybound: float | tuple[float | None, float | None] | None = ...,
         ylabel: str = ...,
-        ylim: float | None | tuple[float | None, float | None] = ...,
+        ylim: float | tuple[float | None, float | None] | None = ...,
         ymargin: float = ...,
         yscale: str | ScaleBase = ...,
         yticklabels: Iterable[str | Text] = ...,
@@ -236,7 +236,7 @@ class FacetGrid(Grid):
         subplot_kws: dict[str, Any] | None = None,
         gridspec_kws: dict[str, Any] | None = None,
     ) -> None: ...
-    def facet_data(self) -> Generator[tuple[tuple[int, int, int], DataFrame], None, None]: ...
+    def facet_data(self) -> Generator[tuple[tuple[int, int, int], DataFrame]]: ...
     def map(self, func: Callable[..., object], *args: str, **kwargs: Any) -> Self: ...
     def map_dataframe(self, func: Callable[..., object], *args: str, **kwargs: Any) -> Self: ...
     def facet_axis(self, row_i: int, col_j: int, modify_state: bool = True) -> Axes: ...

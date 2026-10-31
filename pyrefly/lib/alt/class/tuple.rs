@@ -14,7 +14,7 @@ use crate::types::simplify::simplify_tuples;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn as_tuple(&self, cls: &ClassType) -> Option<Tuple> {
         if let Some(named_tuple_elements) = self.named_tuple_element_types(cls) {
             return Some(Tuple::Concrete(named_tuple_elements));

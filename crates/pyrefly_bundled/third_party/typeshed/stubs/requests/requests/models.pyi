@@ -2,8 +2,8 @@ import datetime
 from _typeshed import Incomplete, MaybeNone, Unused
 from collections.abc import Callable, Iterator
 from json import JSONDecoder
-from typing import Any
-from typing_extensions import Self, TypeAlias
+from typing import Any, TypeAlias
+from typing_extensions import Self
 
 from urllib3 import exceptions as urllib3_exceptions, fields, filepost, util
 from urllib3.response import HTTPResponse
@@ -45,10 +45,10 @@ super_len = utils.super_len
 to_native_string = utils.to_native_string
 codes = status_codes.codes
 
-REDIRECT_STATI: Incomplete
-DEFAULT_REDIRECT_LIMIT: Incomplete
-CONTENT_CHUNK_SIZE: Incomplete
-ITER_CHUNK_SIZE: Incomplete
+REDIRECT_STATI: tuple[int, ...]
+DEFAULT_REDIRECT_LIMIT: int
+CONTENT_CHUNK_SIZE: int
+ITER_CHUNK_SIZE: int
 
 class RequestEncodingMixin:
     @property
@@ -164,6 +164,6 @@ class Response:
         **kwds: Any,
     ) -> Any: ...
     @property
-    def links(self) -> dict[Incomplete, Incomplete]: ...
+    def links(self) -> dict[str, dict[str, str]]: ...
     def raise_for_status(self) -> None: ...
     def close(self) -> None: ...

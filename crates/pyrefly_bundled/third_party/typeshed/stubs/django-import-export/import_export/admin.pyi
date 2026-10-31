@@ -1,8 +1,8 @@
 from _typeshed import Incomplete
 from collections.abc import Callable, Sequence
 from logging import Logger
-from typing import Any, Literal, TypeVar
-from typing_extensions import TypeAlias, deprecated
+from typing import Any, Literal, TypeAlias, TypeVar
+from typing_extensions import deprecated
 
 from django.contrib import admin
 from django.contrib.admin.helpers import ActionForm
@@ -105,5 +105,5 @@ class ExportActionMixin(ExportMixin[_ModelT]):
     def export_admin_action(self, request: HttpRequest, queryset: QuerySet[_ModelT]) -> HttpResponse: ...
     def get_actions(self, request: HttpRequest) -> dict[str, tuple[Callable[..., str], str, str] | None]: ...
 
-class ExportActionModelAdmin(ExportActionMixin[_ModelT], admin.ModelAdmin[_ModelT]): ...  # type: ignore[misc]
+class ExportActionModelAdmin(ExportActionMixin[_ModelT], admin.ModelAdmin[_ModelT]): ...  # type: ignore[misc] # pyrefly: ignore[inconsistent-inheritance]
 class ImportExportActionModelAdmin(ImportMixin[_ModelT], ExportActionModelAdmin[_ModelT]): ...  # type: ignore[misc]

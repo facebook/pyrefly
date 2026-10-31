@@ -2,9 +2,10 @@ import io
 import logging
 import re
 import socket
-from _typeshed import ReadableBuffer
+from _typeshed import Incomplete, ReadableBuffer, Unused
 from collections.abc import Callable
-from typing import Any, Final
+from typing import Any, Final, Protocol, overload, type_check_only
+from typing_extensions import Self
 
 from gunicorn.config import Config
 from gunicorn.http import Request
@@ -15,13 +16,24 @@ BLKSIZE: Final = 0x3FFFFFFF
 HEADER_VALUE_RE: Final[re.Pattern[str]]
 log: logging.Logger
 
+@type_check_only
+class _FileLikeProtocol(Protocol):
+    def read(self, size: int, /) -> bytes: ...
+    def seek(self, offset: int, /) -> object: ...
+
+    # optional fields:
+    # def close(self) -> None: ...
+    # def fileno(self) -> int: ...
+
 class FileWrapper:
     filelike: io.IOBase
     blksize: int
     close: Callable[[], None] | None
 
-    def __init__(self, filelike: io.IOBase, blksize: int = 8192) -> None: ...
-    def __getitem__(self, key: Any) -> bytes: ...
+    def __init__(self, filelike: _FileLikeProtocol, blksize: int = 8192) -> None: ...
+    def __getitem__(self, key: Unused) -> bytes: ...
+    def __iter__(self) -> Self: ...
+    def __next__(self) -> bytes: ...
 
 class WSGIErrorsWrapper(io.RawIOBase):
     streams: list[io.TextIOBase]
@@ -32,9 +44,27 @@ class WSGIErrorsWrapper(io.RawIOBase):
 def base_environ(cfg: Config) -> _EnvironType: ...
 def default_environ(req: Request, sock: socket.socket, cfg: Config) -> _EnvironType: ...
 def proxy_environ(req: Request) -> _EnvironType: ...
+
+@overload
 def create(
-    req: Request, sock: socket.socket, client: _AddressType, server: _AddressType, cfg: Config
+    req: Request,
+    sock: socket.socket,
+    client: _AddressType,
+    server: _AddressType,
+    cfg: Config,
+    response_class: type[Response] | None = None,
+    response_args: tuple[Incomplete, ...] = (),
 ) -> tuple[Response, _EnvironType]: ...
+@overload
+def create(
+    req: Request,
+    sock: socket.socket,
+    client: _AddressType,
+    server: _AddressType,
+    cfg: Config,
+    response_class: type[Incomplete],
+    response_args: tuple[Incomplete, ...] = (),
+) -> tuple[Incomplete, _EnvironType]: ...
 
 class Response:
     req: Request

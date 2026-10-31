@@ -615,6 +615,7 @@ fn return_shim_callees(
 }
 
 static TEST_MODULE_NAME: &str = "test";
+static SHAPE_EXTENSIONS_MODULE_NAME: &str = "shape_extensions";
 
 #[macro_export]
 macro_rules! call_graph_testcase {
@@ -645,6 +646,31 @@ def bar():
             vec![(
                 "3:3-3:8",
                 regular_call_callees(vec![create_call_target("test.bar", TargetType::Function)]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_flag_receiver_uses_builtin_domain,
+    SHAPE_EXTENSIONS_MODULE_NAME,
+    r#"
+class Flag[T]: ...
+
+def foo[K: Flag[int]](k: K):
+  k.bit_length()
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "shape_extensions.foo",
+            vec![(
+                "5:3-5:17",
+                regular_call_callees(vec![
+                    create_call_target("builtins.int.bit_length", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.int", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
             )],
         )]
     }
@@ -895,6 +921,122 @@ def foo(c: C):
         vec![(
             "test.foo",
             vec![("5:4-5:8", regular_call_callees(call_targets))],
+        )]
+    }
+);
+
+// A non-callable intersection member must not obscure the callable fallback's target.
+call_graph_testcase!(
+    test_intersection_call_single_callable_target,
+    TEST_MODULE_NAME,
+    r#"
+class Marker: ...
+class CallableA:
+    def __call__(self, x: int) -> int: ...
+def invoke(value: Marker):
+    if isinstance(value, CallableA):
+        value(1)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.invoke",
+            vec![
+                (
+                    "6:26-6:35|identifier|CallableA",
+                    class_identifier_without_constructors("test.CallableA", context),
+                ),
+                (
+                    "6:8-6:36",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.isinstance", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::bool()),
+                    ]),
+                ),
+                (
+                    "7:9-7:17",
+                    regular_call_callees(vec![
+                        create_call_target("test.CallableA.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.CallableA", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
+        )]
+    }
+);
+
+// The fallback supplies B's edge; intersection dispatch must also retain A's edge.
+call_graph_testcase!(
+    test_intersection_call_multiple_callable_targets,
+    TEST_MODULE_NAME,
+    r#"
+class A:
+    def __call__(self, x: int) -> int: ...
+class B:
+    def __call__(self, x: int) -> int: ...
+def invoke(value: A):
+    if isinstance(value, B):
+        value(1)
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.invoke",
+            vec![
+                (
+                    "7:19-7:24|identifier|value",
+                    regular_identifier_callees(vec![
+                        create_call_target("test.A.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.A", context),
+                    ]),
+                ),
+                (
+                    "7:26-7:27|identifier|B",
+                    class_identifier_without_constructors("test.B", context),
+                ),
+                (
+                    "7:8-7:28",
+                    call_callees(
+                        vec![
+                            create_call_target("builtins.isinstance", TargetType::Function)
+                                .with_return_type(ScalarTypeProperties::bool()),
+                        ],
+                        vec![],
+                        vec![],
+                        vec![(
+                            0,
+                            vec![
+                                create_call_target("test.A.__call__", TargetType::Overrides)
+                                    .with_implicit_receiver(
+                                        ImplicitReceiver::TrueWithObjectReceiver,
+                                    )
+                                    .with_implicit_dunder_call(true)
+                                    .with_receiver_class_for_test("test.A", context),
+                            ],
+                            Unresolved::False,
+                        )],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "8:9-8:17",
+                    regular_call_callees(vec![
+                        create_call_target("test.A.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.A", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                        create_call_target("test.B.__call__", TargetType::Overrides)
+                            .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                            .with_implicit_dunder_call(true)
+                            .with_receiver_class_for_test("test.B", context)
+                            .with_return_type(ScalarTypeProperties::int()),
+                    ]),
+                ),
+            ],
         )]
     }
 );
@@ -2470,6 +2612,42 @@ def main(x) -> None:
 );
 
 call_graph_testcase!(
+    test_for_loop_with_parenthesized_iterator,
+    TEST_MODULE_NAME,
+    r#"
+def foo(in_scope: list[int], by_file: bool):
+  for path in in_scope or ([] if by_file else [0]):
+    pass
+"#,
+    &|context: &ModuleContext| {
+        let iter_targets = vec![{
+            create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.list", context)
+        }];
+        let next_targets = vec![
+            create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("typing.Iterator", context)
+                .with_return_type(ScalarTypeProperties::int()),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:15-3:50|artificial-call|for-iter",
+                    regular_call_callees(iter_targets),
+                ),
+                (
+                    "3:15-3:50|artificial-call|for-next",
+                    regular_call_callees(next_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_list_of_methods_and_functions_called_in_loop,
     TEST_MODULE_NAME,
     r#"
@@ -3330,6 +3508,44 @@ def foo() -> None:
 );
 
 call_graph_testcase!(
+    test_generator_comprehension_with_parenthesized_iterator,
+    TEST_MODULE_NAME,
+    r#"
+def foo(values: list[int], defaults: list[int], condition: bool):
+  return (
+      value
+      for value in (values or (defaults if condition else []))
+  )
+"#,
+    &|context: &ModuleContext| {
+        let iter_targets = vec![{
+            create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.list", context)
+        }];
+        let next_targets = vec![
+            create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("typing.Iterator", context)
+                .with_return_type(ScalarTypeProperties::int()),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:21-5:61|artificial-call|generator-iter",
+                    regular_call_callees(iter_targets),
+                ),
+                (
+                    "5:21-5:61|artificial-call|generator-next",
+                    regular_call_callees(next_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_various_comprehensions,
     TEST_MODULE_NAME,
     r#"
@@ -3746,6 +3962,51 @@ def foo(log: LogRecord):
                     ]),
                 ),
             ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_ann_assign_without_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:11|artificial-call|subscript-get-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__getitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context)
+                        .with_return_type(ScalarTypeProperties::int()),
+                ]),
+            )],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_dict_subscript_ann_assign_with_value,
+    TEST_MODULE_NAME,
+    r#"
+def foo(d: dict[str, int]):
+  d["key"]: int = 0
+"#,
+    &|context: &ModuleContext| {
+        vec![(
+            "test.foo",
+            vec![(
+                "3:3-3:20|artificial-call|subscript-set-item",
+                regular_call_callees(vec![
+                    create_call_target("builtins.dict.__setitem__", TargetType::Overrides)
+                        .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                        .with_receiver_class_for_test("builtins.dict", context),
+                ]),
+            )],
         )]
     }
 );
@@ -7374,6 +7635,126 @@ def trivial_decorator(f: Callable[P, None]) -> Callable[P, None]:
                 (
                     "7:9-7:27",
                     unresolved_expression_callees(UnresolvedReason::UnexpectedPyreflyTarget),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_intersection_constructor_bound_target,
+    TEST_MODULE_NAME,
+    r#"
+from typing import TypeVar
+class Base:
+    def __init__(self) -> None: ...
+class Child(Base):
+    def __init__(self, required: int) -> None: ...
+T = TypeVar("T", bound=Base)
+def invoke(cls: type[T]):
+    if issubclass(cls, Child):
+        cls(1)
+"#,
+    &|context: &ModuleContext| {
+        let init_targets = vec![
+            create_call_target("test.Child.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.Child", context),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        vec![(
+            "test.invoke",
+            vec![
+                (
+                    "9:19-9:22|identifier|cls",
+                    identifier_callees(
+                        vec![],
+                        vec![
+                            create_call_target("test.Base.__init__", TargetType::Function)
+                                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                                .with_receiver_class_for_test("test.Base", context),
+                        ],
+                        new_targets.clone(),
+                        vec![],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "9:24-9:29|identifier|Child",
+                    identifier_callees(
+                        vec![],
+                        init_targets.clone(),
+                        new_targets.clone(),
+                        vec![],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "9:8-9:30",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.issubclass", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::bool()),
+                    ]),
+                ),
+                (
+                    "10:9-10:15",
+                    constructor_call_callees(init_targets, new_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_intersection_constructor_constrained_target,
+    TEST_MODULE_NAME,
+    r#"
+from typing import TypeVar
+class A:
+    def __init__(self, required: int) -> None: ...
+class B:
+    def __init__(self, required: str) -> None: ...
+T = TypeVar("T", A, B)
+def invoke(cls: type[T]):
+    if issubclass(cls, A):
+        cls(1)
+"#,
+    &|context: &ModuleContext| {
+        let init_targets = vec![
+            create_call_target("test.A.__init__", TargetType::Function)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("test.A", context),
+        ];
+        let new_targets = vec![
+            create_call_target("builtins.object.__new__", TargetType::Function)
+                .with_is_static_method(true),
+        ];
+        vec![(
+            "test.invoke",
+            vec![
+                (
+                    "9:24-9:25|identifier|A",
+                    identifier_callees(
+                        vec![],
+                        init_targets.clone(),
+                        new_targets.clone(),
+                        vec![],
+                        Unresolved::False,
+                    ),
+                ),
+                (
+                    "9:8-9:26",
+                    regular_call_callees(vec![
+                        create_call_target("builtins.issubclass", TargetType::Function)
+                            .with_return_type(ScalarTypeProperties::bool()),
+                    ]),
+                ),
+                (
+                    "10:9-10:15",
+                    constructor_call_callees(init_targets, new_targets),
                 ),
             ],
         )]

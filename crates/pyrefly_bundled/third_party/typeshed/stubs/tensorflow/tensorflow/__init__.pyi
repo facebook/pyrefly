@@ -1,19 +1,21 @@
 import abc
 from _typeshed import Incomplete, Unused
 from abc import ABC, ABCMeta, abstractmethod
-from builtins import bool as _bool
+from builtins import bool as _bool, slice as _slice
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from enum import Enum
 from types import TracebackType
-from typing import Any, Generic, Literal, TypeVar, overload
-from typing_extensions import ParamSpec, Self
+from typing import Any, Generic, Literal, ParamSpec, TypeAlias, TypeVar, overload
+from typing_extensions import Self
 
 from google.protobuf.message import Message
 from tensorflow import (
     data as data,
+    debugging as debugging,
     experimental as experimental,
     feature_column as feature_column,
+    image as image,
     initializers as initializers,
     io as io,
     keras as keras,
@@ -26,12 +28,15 @@ from tensorflow._aliases import (
     AnyArray,
     DTypeLike,
     IntArray,
+    IntTensorCompatible,
     RaggedTensorLike,
     ScalarTensorCompatible,
     ShapeLike,
+    Signature,
     Slice,
     SparseTensorCompatible,
     TensorCompatible,
+    TensorLike,
     UIntTensorCompatible,
 )
 from tensorflow.autodiff import GradientTape as GradientTape
@@ -230,10 +235,12 @@ class TensorShape(metaclass=ABCMeta):
     def assert_has_rank(self, rank: int) -> None: ...
     def assert_is_compatible_with(self, other: Iterable[int | None]) -> None: ...
     def __bool__(self) -> _bool: ...
+
     @overload
     def __getitem__(self, key: int) -> int | None: ...
     @overload
-    def __getitem__(self, key: slice) -> TensorShape: ...
+    def __getitem__(self, key: _slice) -> TensorShape: ...
+
     def __iter__(self) -> Iterator[int | None]: ...
     def __len__(self) -> int: ...
     def __add__(self, other: Iterable[int | None]) -> TensorShape: ...
@@ -253,13 +260,13 @@ class Graph:
     def __getattr__(self, name: str) -> Incomplete: ...
 
 class IndexedSlices(metaclass=ABCMeta):
-    def __init__(self, values: Tensor, indices: Tensor, dense_shape: None | Tensor = None) -> None: ...
+    def __init__(self, values: Tensor, indices: Tensor, dense_shape: Tensor | None = None) -> None: ...
     @property
     def values(self) -> Tensor: ...
     @property
     def indices(self) -> Tensor: ...
     @property
-    def dense_shape(self) -> None | Tensor: ...
+    def dense_shape(self) -> Tensor | None: ...
     @property
     def shape(self) -> TensorShape: ...
     @property
@@ -282,13 +289,14 @@ class name_scope(metaclass=abc.ABCMeta):
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+_NameScope: TypeAlias = name_scope
 
 class Module(AutoTrackable):
     def __init__(self, name: str | None = None) -> None: ...
     @property
     def name(self) -> str: ...
     @property
-    def name_scope(self) -> name_scope: ...
+    def name_scope(self) -> _NameScope: ...
     # Documentation only specifies these as returning Sequence. Actual
     # implementation does tuple.
     @property
@@ -372,26 +380,33 @@ class RaggedTensorSpec(TypeSpec[struct_pb2.TypeSpecProto]):
     @classmethod
     def from_value(cls, value: RaggedTensor) -> Self: ...
 
+newaxis: None
+
 def convert_to_tensor(
     value: TensorCompatible | IndexedSlices,
     dtype: DTypeLike | None = None,
     dtype_hint: DTypeLike | None = None,
     name: str | None = None,
 ) -> Tensor: ...
+
 @overload
 def expand_dims(input: TensorCompatible, axis: int, name: str | None = None) -> Tensor: ...
 @overload
 def expand_dims(input: RaggedTensor, axis: int, name: str | None = None) -> RaggedTensor: ...
+
 @overload
 def concat(values: TensorCompatible, axis: int, name: str | None = "concat") -> Tensor: ...
 @overload
 def concat(values: Sequence[RaggedTensor], axis: int, name: str | None = "concat") -> RaggedTensor: ...
+
 @overload
 def squeeze(
     input: TensorCompatible, axis: int | tuple[int, ...] | list[int] | None = None, name: str | None = None
 ) -> Tensor: ...
 @overload
 def squeeze(input: RaggedTensor, axis: int | tuple[int, ...] | list[int], name: str | None = None) -> RaggedTensor: ...
+
+def slice(input_: TensorCompatible, begin: IntTensorCompatible, size: IntTensorCompatible, name: str | None = None) -> Tensor: ...
 def split(
     value: TensorCompatible,
     num_or_size_splits: int | TensorCompatible,
@@ -399,20 +414,24 @@ def split(
     num: int | None = None,
     name: str | None = "split",
 ) -> list[Tensor]: ...
+def stack(values: TensorCompatible, axis: int = 0, name: str | None = "stack") -> Tensor: ...
 def tensor_scatter_nd_update(
     tensor: TensorCompatible, indices: TensorCompatible, updates: TensorCompatible, name: str | None = None
 ) -> Tensor: ...
 def constant(
     value: TensorCompatible, dtype: DTypeLike | None = None, shape: ShapeLike | None = None, name: str | None = "Const"
 ) -> Tensor: ...
+
 @overload
 def cast(x: TensorCompatible, dtype: DTypeLike, name: str | None = None) -> Tensor: ...
 @overload
 def cast(x: SparseTensor, dtype: DTypeLike, name: str | None = None) -> SparseTensor: ...
 @overload
 def cast(x: RaggedTensor, dtype: DTypeLike, name: str | None = None) -> RaggedTensor: ...
+
 def zeros(shape: ShapeLike, dtype: DTypeLike = ..., name: str | None = None, layout: Layout | None = None) -> Tensor: ...
 def ones(shape: ShapeLike, dtype: DTypeLike = ..., name: str | None = None, layout: Layout | None = None) -> Tensor: ...
+
 @overload
 def zeros_like(
     input: TensorCompatible | IndexedSlices, dtype: DTypeLike | None = None, name: str | None = None, layout: Layout | None = None
@@ -421,6 +440,7 @@ def zeros_like(
 def zeros_like(
     input: RaggedTensor, dtype: DTypeLike | None = None, name: str | None = None, layout: Layout | None = None
 ) -> RaggedTensor: ...
+
 @overload
 def ones_like(
     input: TensorCompatible, dtype: DTypeLike | None = None, name: str | None = None, layout: Layout | None = None
@@ -429,7 +449,38 @@ def ones_like(
 def ones_like(
     input: RaggedTensor, dtype: DTypeLike | None = None, name: str | None = None, layout: Layout | None = None
 ) -> RaggedTensor: ...
+
 def reshape(tensor: TensorCompatible, shape: ShapeLike | Tensor, name: str | None = None) -> Tensor: ...
+def reverse(tensor: TensorCompatible, axis: IntTensorCompatible, name: str | None = None) -> Tensor: ...
+
+_ElemT = TypeVar("_ElemT", bound=TensorLike)
+_RetT = TypeVar("_RetT", bound=TensorLike)
+
+@overload
+def map_fn(
+    fn: Callable[[_ElemT], _RetT],
+    elems: _ElemT,
+    dtype: DTypeLike | None = None,
+    parallel_iterations: int | None = None,
+    back_prop: _bool = True,
+    swap_memory: _bool = False,
+    infer_shape: _bool = True,
+    name: str | None = None,
+    fn_output_signature: Signature | None = None,
+) -> _RetT: ...
+@overload
+def map_fn(
+    fn: Callable[[Tensor], _RetT],
+    elems: TensorCompatible,
+    dtype: DTypeLike | None = None,
+    parallel_iterations: int | None = None,
+    back_prop: _bool = True,
+    swap_memory: _bool = False,
+    infer_shape: _bool = True,
+    name: str | None = None,
+    fn_output_signature: Signature | None = None,
+) -> _RetT: ...
+
 def pad(
     tensor: TensorCompatible,
     paddings: Tensor | IntArray | Iterable[Iterable[int]],
@@ -455,4 +506,18 @@ def clip_by_value(
     t: Tensor | IndexedSlices, clip_value_min: TensorCompatible, clip_value_max: TensorCompatible, name: str | None = None
 ) -> Tensor: ...
 def tile(input: RaggedTensorLike, multiples: Tensor | Sequence[int], name: str | None = None) -> Tensor: ...
+
+@overload
+def range(
+    limit: int | Tensor, /, *, delta: int | Tensor = 1, dtype: DTypeLike | None = None, name: str | None = "range"
+) -> Tensor: ...
+@overload
+def range(
+    start: int | Tensor = 0,
+    limit: int | Tensor = 0,
+    delta: int | Tensor = 1,
+    dtype: DTypeLike | None = None,
+    name: str | None = "range",
+) -> Tensor: ...
+
 def __getattr__(name: str): ...  # incomplete module
