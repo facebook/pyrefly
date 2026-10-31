@@ -13,6 +13,121 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
+    bug = "Mutable container initializers are not current validation input",
+    test_model_validate_mutable_input_provenance,
+    r#"
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(ge=0)
+
+payload = {"x": -1}  # E: violates Pydantic `ge` constraint
+payload.update({"x": 1})
+Model.model_validate(payload)
+
+aliased = {"x": -1}  # E: violates Pydantic `ge` constraint
+other = aliased
+other["x"] = 1
+Model.model_validate(aliased)
+
+class Outer(BaseModel):
+    items: list[Model]
+
+items = [{"x": -1}]  # E: violates Pydantic `ge` constraint
+items.clear()
+Outer.model_validate({"items": items})
+
+# Inline structure and scalar literal types remain checkable.
+negative = -1
+Model.model_validate({"x": negative})  # E: violates Pydantic `ge` constraint
+Outer.model_validate({"items": [{"x": -1}]})  # E: violates Pydantic `ge` constraint
+"#,
+);
+
+pydantic_testcase!(
+    bug = "Before and plain validators invalidate raw input constraint checks",
+    test_model_validate_transforming_field_validators,
+    r#"
+from pydantic import BaseModel, Field, field_validator
+
+class Before(BaseModel):
+    x: int = Field(ge=0)
+
+    @field_validator("x", mode="before")
+    @classmethod
+    def normalize(cls, value: int) -> int:
+        return abs(value)
+
+class Child(Before):
+    pass
+
+Before.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Child.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+
+class Plain(BaseModel):
+    x: int = Field(ge=0)
+
+    @field_validator("x", mode="plain")
+    @classmethod
+    def normalize(cls, value: object) -> int:
+        return 1
+
+Plain.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+
+class Item(BaseModel):
+    x: int = Field(ge=0)
+
+class Wrapper(BaseModel):
+    child: Item
+    unchecked: int = Field(ge=0)
+
+    @field_validator("child", mode="before")
+    @classmethod
+    def normalize_child(cls, value: object) -> Item:
+        return Item(x=1)
+
+Wrapper.model_validate({"child": {"x": -1}, "unchecked": 1})  # E: violates Pydantic `ge` constraint
+Wrapper.model_validate({"child": {"x": 1}, "unchecked": -1})  # E: violates Pydantic `ge` constraint
+"#,
+);
+
+pydantic_testcase!(
+    bug = "Unsupported validation aliases are confused with absent aliases",
+    test_model_validate_unsupported_validation_aliases,
+    r#"
+from typing import Annotated
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
+
+class Choice(BaseModel):
+    x: int = Field(ge=0, validation_alias=AliasChoices("y", "x"))
+
+Choice.model_validate({"y": 1, "x": -1})  # E: violates Pydantic `ge` constraint
+Choice.model_validate({"y": 1, "x": -1}, by_alias=False, by_name=True)  # E: violates Pydantic `ge` constraint
+
+class Fallback(BaseModel):
+    x: int = Field(ge=0, alias="z", validation_alias=AliasChoices("y", "z"))
+
+Fallback.model_validate({"y": 1, "z": -1})  # E: violates Pydantic `ge` constraint
+
+class Path(BaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+    x: int = Field(ge=0, validation_alias=AliasPath("values", 0))
+
+Path.model_validate({"values": [1], "x": -1})  # E: violates Pydantic `ge` constraint
+
+class AnnotatedChoice(BaseModel):
+    x: Annotated[int, Field(ge=0, validation_alias=AliasChoices("y", "x"))]
+
+AnnotatedChoice.model_validate({"y": 1, "x": -1})  # E: violates Pydantic `ge` constraint
+
+class StringAlias(BaseModel):
+    x: int = Field(ge=0, validation_alias="y")
+
+StringAlias.model_validate({"y": -1})  # E: violates Pydantic `ge` constraint
+"#,
+);
+
+pydantic_testcase!(
     test_field_conflicting_defaults_uses_overload_error,
     r#"
 from pydantic import BaseModel, Field, PrivateAttr
