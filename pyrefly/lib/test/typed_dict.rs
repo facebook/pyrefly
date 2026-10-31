@@ -2127,7 +2127,7 @@ class Target(TypedDict):
 
 def f(o: Open) -> Target:
     # `x` could come from a subclass of `Open`, but `tag` is incompatible regardless.
-    return {**o}  # E: Unpacked `Open` is not assignable to `Target`
+    return {**o}  # E: Unpacked `Open` is not assignable to `Target` # E: Missing required key `x` for TypedDict `Target`
     "#,
 );
 
@@ -3090,5 +3090,24 @@ from typing import Literal, TypedDict, assert_type
 
 M = TypedDict("M", (x := 1), total=(x := True))  # E: Expected valid functional typed dictionary definition  # E: Unrecognized keyword argument `total` in typed dictionary definition
 assert_type(x, Literal[True])
+"#,
+);
+testcase!(
+    test_typed_dict_unpacking_missing_required_key,
+    r#"
+from typing import TypedDict
+class Open(TypedDict):
+    x: int
+class Closed(TypedDict, closed=True):
+    x: int
+class Target(TypedDict):
+    x: int
+    y: int
+def from_open(a: Open) -> Target:
+    return {**a} # E: Missing required key `y` for TypedDict `Target`
+def from_closed(a: Closed) -> Target:
+    return {**a} # E: Missing required key `y` for TypedDict `Target`
+def from_target(t: Target) -> Target:
+    return {**t}
 "#,
 );
