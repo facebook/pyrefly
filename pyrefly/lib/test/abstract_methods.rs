@@ -345,7 +345,7 @@ class Child2(P2):
 
 class Child3(P3):
     def method(self) -> str:
-        return super().method()  # E: Method `method` inherited from class `P3` has no implementation and cannot be accessed via `super()`
+        return super().method()  # pyrefly: ignore[abstract-method-call]
 "#,
 );
 
@@ -361,7 +361,7 @@ class Base(ABC):
 
 class Child(Base):
     def method(self) -> str:
-        super().method()  # E: Method `method` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+        super().method()  # pyrefly: ignore[abstract-method-call]
         return "child"
 
 # Child is concrete, so this works
