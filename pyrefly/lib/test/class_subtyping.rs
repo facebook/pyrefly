@@ -941,3 +941,66 @@ def f(cls):
     class A(cls): ...
 "#,
 );
+
+testcase!(
+    test_call_base_typevar_alias_identity,
+    {
+        let mut env = TestEnv::one(
+            "params",
+            "from typing import TypeVar\nT = TypeVar('T')\nS = TypeVar('S')",
+        );
+        env.add("other", "from typing import TypeVar\nT = TypeVar('T')");
+        env.add("bridge", "from params import T as U");
+        env
+    },
+    r#"
+from typing import Any, Generic, assert_type
+import params
+import params as alternate
+import other
+from params import T as A, T as B
+from bridge import U
+
+def ident[X](x: type[X]) -> type[X]: ...
+
+class C(ident(list[B]), Generic[A]): pass
+assert_type(C[int]()[0], int)
+class D(ident(list[params.T]), Generic[A]): pass
+assert_type(D[str]()[0], str)
+class E(ident(list[B]), Generic[params.T]): pass
+assert_type(E[int]()[0], int)
+class F(ident(list[alternate.T]), Generic[params.T]): pass
+assert_type(F[str]()[0], str)
+class G(ident(list[U]), Generic[A]): pass
+assert_type(G[int]()[0], int)
+
+class Pair(ident(tuple[params.T, params.S]), Generic[params.T, params.S]): pass
+assert_type(Pair[int, str]()[0], int)
+assert_type(Pair[int, str]()[1], str)
+
+# Identical names do not make distinct TypeVar declarations interchangeable.
+class Distinct(ident(list[other.T]), Generic[params.T]): ...  # E: Type variable `T` is not in scope
+assert_type(Distinct[int]()[0], Any)
+class Unbound(ident(list[params.S]), Generic[params.T]): ...  # E: Type variable `S` is not in scope
+assert_type(Unbound[int]()[0], Any)
+    "#,
+);
+
+testcase!(
+    bug = "Constructor callees erase class-bound TypeVars imported under another alias",
+    test_call_base_constructor_typevar_aliases,
+    TestEnv::one("params", "from typing import TypeVar\nT = TypeVar('T')"),
+    r#"
+from typing import Any, Generic, assert_type
+import params
+from params import T as A, T as B
+
+class Factory(Generic[A]):
+    def __new__(cls) -> type[list[A]]: ...
+
+class C(Factory[B](), Generic[A]): ...  # E: Type variable `T` is not in scope
+assert_type(C[int]()[0], Any)
+class D(Factory[params.T](), Generic[B]): ...  # E: Type variable `T` is not in scope
+assert_type(D[str]()[0], Any)
+    "#,
+);
