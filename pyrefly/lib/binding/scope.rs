@@ -1792,6 +1792,22 @@ impl Scopes {
         }
     }
 
+    pub fn mark_method_as_classmethod(&mut self, method_name: &Name) {
+        let ScopeKind::Class(class_scope) = &mut self.current_mut().kind else {
+            unreachable!("a reassigned classmethod is only marked in a class body")
+        };
+        for attributes in [
+            &mut class_scope.attributes_from_recognized_methods,
+            &mut class_scope.attributes_from_other_methods,
+        ] {
+            if let Some(attributes) = attributes.get_mut(method_name) {
+                for attribute in attributes.values_mut() {
+                    attribute.3 = MethodSelfKind::Class;
+                }
+            }
+        }
+    }
+
     /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
     pub fn current_class_def_index(&self) -> Option<ClassDefIndex> {
         match &self.current().kind {

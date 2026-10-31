@@ -59,6 +59,7 @@ use crate::types::literal::Lit;
 use crate::types::module::ModuleType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
+use crate::types::quantified::QuantifiedOrigin;
 use crate::types::read_only::ReadOnlyReason;
 use crate::types::type_info::TypeInfo;
 use crate::types::type_var::Restriction;
@@ -2548,6 +2549,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         quantified: Quantified,
         bound: AttributeBase1,
     ) -> Option<AttributeBase1> {
+        if quantified.identity().origin == QuantifiedOrigin::MethodReceiver {
+            // Preserve each bound's descriptor binding behavior. Use Self so
+            // classmethod results refer to the class, not type[Receiver].
+            return Some(match bound {
+                AttributeBase1::ClassInstance(cls) => {
+                    AttributeBase1::SelfType(self.as_class_type_unchecked(cls.class_object()))
+                }
+                AttributeBase1::ClassObject(cls) | AttributeBase1::GenericAlias(cls) => {
+                    AttributeBase1::ClassObject(ClassBase::SelfType(
+                        self.as_class_type_unchecked(cls.class_object()),
+                    ))
+                }
+                _ => unreachable!("a method receiver is bounded by its class and instances"),
+            });
+        }
         match bound {
             AttributeBase1::Any(style) => Some(AttributeBase1::Any(style)),
             AttributeBase1::ClassObject(ClassBase::ClassDef(cls) | ClassBase::ClassType(cls)) => {

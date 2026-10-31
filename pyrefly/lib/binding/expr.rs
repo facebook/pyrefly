@@ -420,6 +420,23 @@ impl<'a> BindingsBuilder<'a> {
                 is_module_scope,
                 is_outer_class_type_parameter,
             } => {
+                if let Some(Binding::Function {
+                    decorated_idx,
+                    in_class: true,
+                    ..
+                }) = self.idx_to_binding(value_idx.unwrap_or(lookup_result_idx))
+                {
+                    let undecorated_idx = self
+                        .idx_to_binding(*decorated_idx)
+                        .expect("a function flow binding has a decorated function")
+                        .undecorated_idx;
+                    let function = self
+                        .idx_to_binding_mut(undecorated_idx)
+                        .expect("a decorated function has an undecorated function");
+                    if !function.def.is_reassigned_classmethod {
+                        function.def.is_used_before_classmethod = true;
+                    }
+                }
                 if is_outer_class_type_parameter {
                     return self.insert_binding(
                         key,

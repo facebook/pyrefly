@@ -1020,6 +1020,14 @@ impl<'a> BindingsBuilder<'a> {
                             self.assign_type_var(name, call, kind);
                             return;
                         }
+                        if special == SpecialExport::ClassMethod
+                            && self.scopes.in_class_body()
+                            && call.arguments.keywords.is_empty()
+                            && let [Expr::Name(argument)] = &*call.arguments.args
+                            && argument.id == name.id
+                        {
+                            self.infer_classmethod_receiver(&name.id);
+                        }
                         match special {
                             SpecialExport::ParamSpec => {
                                 self.assign_param_spec(name, call);
