@@ -1834,7 +1834,7 @@ fn quickfix_deprecated_contextmanager_generator_import_aliases() {
     ] {
         for module in ["typing", "collections.abc"] {
             for minor in [12, 13] {
-                for alias in ["G", "__G__", "__G"] {
+                for (alias, binding) in [("G", "G"), ("__G__", "__G__"), ("__G", generator)] {
                     let before = format!(
                         "from contextlib import {decorator}\n\
                          from {module} import {iterator}, {generator} as {alias}\n\n\
@@ -1842,16 +1842,21 @@ fn quickfix_deprecated_contextmanager_generator_import_aliases() {
                     );
                     let after = apply_contextmanager_fix(&before, minor).unwrap();
                     let defaults = if minor < 13 { defaults } else { "" };
-                    // Bug: `__G` is mangled to `_C__G` in the method annotation,
-                    // but the module-level import binds only `__G`.
                     assert!(
-                        after.contains(&format!("def managed(self) -> {alias}[int{defaults}]:")),
+                        after.contains(&format!("def managed(self) -> {binding}[int{defaults}]:")),
                         "{after}"
                     );
+                    let new_import = usize::from(binding == generator);
                     assert_eq!(
-                        before.matches(" import ").count(),
+                        before.matches(" import ").count() + new_import,
                         after.matches(" import ").count()
                     );
+                    if new_import != 0 {
+                        assert!(
+                            after.starts_with(&format!("from typing import {generator}\n")),
+                            "{after}"
+                        );
+                    }
                 }
             }
         }

@@ -123,6 +123,8 @@ pub(crate) fn replace_return_code_action(
             import.names.iter().find_map(|alias| {
                 let binding = alias.asname.as_ref().unwrap_or(&alias.name);
                 (alias.name.id == to
+                    // A module-level private alias is name-mangled in class annotations.
+                    && !Ast::is_mangled_attr(&binding.id)
                     && names
                         .sites
                         .get(&binding.id)
