@@ -420,9 +420,11 @@ impl<'a> BindingsBuilder<'a> {
                 is_module_scope,
                 is_outer_class_type_parameter,
             } => {
-                if self.scopes.in_class_body()
-                    && let Some(Binding::Function { decorated_idx, .. }) =
-                        self.idx_to_binding(value_idx.unwrap_or(lookup_result_idx))
+                if let Some(Binding::Function {
+                    decorated_idx,
+                    in_class: true,
+                    ..
+                }) = self.idx_to_binding(value_idx.unwrap_or(lookup_result_idx))
                 {
                     let undecorated_idx = self
                         .idx_to_binding(*decorated_idx)

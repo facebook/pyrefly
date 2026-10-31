@@ -626,7 +626,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     QuantifiedIdentity::new(
                         self.module().name(),
                         AnchorIndex::first(def.name.range),
-                        QuantifiedOrigin::Synthetic { is_self: true },
+                        QuantifiedOrigin::MethodReceiver,
                     ),
                     None,
                     Restriction::Bound(self.unions(vec![instance, class])),
@@ -737,10 +737,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
-        tparams.extend(receiver_tparam);
-        // Validate written parameters before declaration-scoped dimensions are appended below.
-        let tparams =
-            Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
+        // Only written parameters are subject to default ordering constraints.
+        let mut tparams =
+            self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
+        if let Some(receiver) = receiver_tparam {
+            tparams.extend(&TParams::new(vec![receiver]));
+        }
+        let tparams = Arc::new(tparams);
         let func_id = Arc::new(FuncDefId {
             qname: QName::new(def.name.clone(), parent.dupe(), self.module().dupe()),
             cls: defining_cls.clone(),

@@ -1394,6 +1394,112 @@ assert_type(WithSelf.f(WithSelf()), WithSelf)
 );
 
 testcase!(
+    test_desugared_classmethod_captured_default,
+    r#"
+from typing import Callable, assert_type
+
+class A:
+    def f(self) -> int:
+        return 1
+
+    def use(self, callback: Callable[[A], int] = f) -> int:
+        return callback(self)
+
+    f = classmethod(f)
+
+assert_type(A().use(), int)
+assert_type(A.f(), int)
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_receiver_dependent_return,
+    r#"
+from typing import assert_type
+
+class A:
+    @classmethod
+    def helper(cls):
+        return cls
+
+    def f(self):
+        return self.helper()
+
+    g = f
+    f = classmethod(f)
+
+class B(A):
+    pass
+
+assert_type(A.f(), type[A])
+assert_type(A().g(), type[A])
+assert_type(B.f(), type[B])
+assert_type(B().g(), type[B])
+
+class Generic[T]:
+    @classmethod
+    def helper(cls):
+        return cls
+
+    def f(self):
+        return self.helper()
+
+    g = f
+    f = classmethod(f)
+
+assert_type(Generic[int].f(), type[Generic[int]])
+assert_type(Generic[int]().g(), type[Generic[int]])
+
+class Specialized(Generic[int]):
+    pass
+
+assert_type(Specialized.f(), type[Specialized])
+assert_type(Specialized().g(), type[Specialized])
+
+class Factory[T]:
+    @classmethod
+    def helper(cls):
+        return cls()
+
+    def f(self):
+        return self.helper()
+
+    g = f
+    f = classmethod(f)
+
+assert_type(Factory[str].f(), Factory[str])
+assert_type(Factory[str]().g(), Factory[str])
+    "#,
+);
+
+testcase!(
+    test_desugared_classmethod_defaulted_type_parameter,
+    r#"
+from typing import assert_type
+
+class A:
+    def f[T = int](self, x: T) -> T:
+        return x
+
+    g = f
+    f = classmethod(f)
+
+assert_type(A.f(1), int)
+assert_type(A().g("hello"), str)
+
+class SameName:
+    def f[Receiver = int](self, x: Receiver) -> Receiver:
+        return x
+
+    g = f
+    f = classmethod(f)
+
+assert_type(SameName.f(1), int)
+assert_type(SameName().g("hello"), str)
+    "#,
+);
+
+testcase!(
     test_desugared_classmethod_decorator_composition,
     r#"
 from typing import Callable, Concatenate, assert_type

@@ -44,6 +44,8 @@ pub enum QuantifiedOrigin {
         /// Is this a Self quantified synthesized for `__new__` on a class?
         is_self: bool,
     },
+    /// An inferred receiver shared by an instance method and a classmethod wrapper.
+    MethodReceiver,
     /// Synthetic binder for the parameter of an `IntTuples` mapper.
     MapIntTuplesParameter,
     /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
