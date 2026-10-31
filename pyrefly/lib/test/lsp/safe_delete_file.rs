@@ -239,3 +239,53 @@ fn test_safe_delete_file_import_only_module_reexports() {
         assert_eq!(paths, ["bridge.py", "consumer.py"]);
     }
 }
+
+// TODO: Wildcard re-exports currently omit the consumer's import.
+#[test]
+fn test_safe_delete_file_wildcard_reexports() {
+    for bridge in [
+        "from target import f as f, g as g\n__all__ = ['f', 'g']\n",
+        "from target import *\n",
+    ] {
+        let paths = file_usage_paths(
+            &[
+                (
+                    "target",
+                    "target.py",
+                    "def f():\n    return 1\ndef g():\n    return 2\n",
+                ),
+                ("bridge", "bridge.py", bridge),
+                (
+                    "consumer",
+                    "consumer.py",
+                    "from bridge import *\nprint(f(), g())\n",
+                ),
+            ],
+            "target",
+        );
+        assert_eq!(paths, ["bridge.py"]);
+    }
+}
+
+#[test]
+fn test_safe_delete_file_wildcard_excludes_unexported_names() {
+    for bridge in [
+        "from target import f\nfrom other import g\n__all__ = ['g']\n",
+        "from target import f as _hidden\nfrom other import g\n",
+    ] {
+        let paths = file_usage_paths(
+            &[
+                ("target", "target.py", "def f():\n    return 1\n"),
+                ("other", "other.py", "def g():\n    return 2\n"),
+                ("bridge", "bridge.py", bridge),
+                (
+                    "consumer",
+                    "consumer.py",
+                    "from bridge import *\nimport target\nprint(g(), target.f())\n",
+                ),
+            ],
+            "target",
+        );
+        assert_eq!(paths, ["bridge.py", "consumer.py"]);
+    }
+}
