@@ -113,8 +113,8 @@ fn test_notebook_code_action_implicit_import_cross_cell() {
         .unwrap();
     interaction.open_notebook("notebook.ipynb", vec!["import foo", "x = foo.bar.x"]);
 
-    // Bug: the import replacement is redirected to an insertion in the use's cell.
-    let target_uri = interaction.cell_uri("notebook.ipynb", "cell2");
+    // The replacement targets the import's cell, not the cell requesting the fix.
+    let target_uri = interaction.cell_uri("notebook.ipynb", "cell1");
     interaction
         .code_action_cell("notebook.ipynb", "cell2", 0, 4, 0, 4)
         .expect_response_with(|response| {
@@ -137,7 +137,7 @@ fn test_notebook_code_action_implicit_import_cross_cell() {
                 };
                 changes.len() == 1
                     && edits.len() == 1
-                    && edits[0].range == Range::new(Position::new(0, 0), Position::new(0, 0))
+                    && edits[0].range == Range::new(Position::new(0, 7), Position::new(0, 10))
                     && edits[0].new_text == "foo.bar"
             })
         })

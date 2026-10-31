@@ -5259,11 +5259,11 @@ impl Server {
                         })?;
                         let mut edit_uri = lsp_location.uri;
                         let mut edit_range = lsp_location.range;
-                        // For notebook cells: if the import quick-fix targets a different
-                        // cell than the one where the action was triggered, redirect the
-                        // edit to the top of the current cell.  This mirrors Pylance's
-                        // behaviour where "insert import" always goes into the active cell.
-                        if let Some(current_cell_idx) = triggered_cell_index {
+                        // Import insertions in notebooks go into the active cell.
+                        // Replacements must retain their target cell and range.
+                        if range.is_empty()
+                            && let Some(current_cell_idx) = triggered_cell_index
+                        {
                             let edit_cell_idx = info.to_cell_for_lsp(range.start());
                             if edit_cell_idx != Some(current_cell_idx) {
                                 // Redirect to the current cell, inserting at line 0.
