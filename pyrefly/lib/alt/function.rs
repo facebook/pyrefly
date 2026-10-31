@@ -606,6 +606,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self_type = None;
         }
 
+        if defining_cls.is_some()
+            && flags.is_classmethod
+            && !flags.is_staticmethod
+            && flags.property_metadata.is_none()
+            && decorators.is_empty()
+            && def.parameters.posonlyargs.is_empty()
+            && def.parameters.args.is_empty()
+            && def.parameters.vararg.is_none()
+        {
+            self.error(
+                errors,
+                def.name.range(),
+                ErrorKind::BadFunctionDefinition,
+                format!(
+                    "Class method `{}` must accept the class as its first positional parameter",
+                    def.name
+                ),
+            );
+        }
+
         // The `self`/`cls` receiver of a method is supplied implicitly at call time, so a
         // default value on it is unreachable and almost always a mistake (e.g. `def m(self=1)`).
         // `self_type` is `Some` exactly when there is an implicit receiver (instance methods,

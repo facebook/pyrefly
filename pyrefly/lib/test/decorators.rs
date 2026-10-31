@@ -706,6 +706,148 @@ assert_type(C.g(), int)
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5294
+testcase!(
+    test_classmethod_missing_receiver,
+    r#"
+from abc import ABC, abstractmethod
+from builtins import classmethod as cm
+from typing import Protocol, overload
+
+alias = classmethod
+
+class C:
+    @classmethod
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
+
+    @classmethod
+    def kwargs_only(**kwargs: object) -> None: ...  # E: Class method `kwargs_only` must accept the class as its first positional parameter
+
+    @classmethod
+    def keyword_only(*, cls: object = None) -> None: ...  # E: Class method `keyword_only` must accept the class as its first positional parameter
+
+    @classmethod
+    def __init_subclass__() -> None: ...  # E: Class method `__init_subclass__` must accept the class as its first positional parameter
+
+    @classmethod
+    def __class_getitem__() -> None: ...  # E: Class method `__class_getitem__` must accept the class as its first positional parameter
+
+class Implicit:
+    def __init_subclass__() -> None: ...  # E: Class method `__init_subclass__` must accept the class as its first positional parameter
+
+    def __class_getitem__() -> None: ...  # E: Class method `__class_getitem__` must accept the class as its first positional parameter
+
+class Aliased:
+    @cm
+    def imported() -> None: ...  # E: Class method `imported` must accept the class as its first positional parameter
+
+    @alias
+    def assigned() -> None: ...  # E: Class method `assigned` must accept the class as its first positional parameter
+
+class Abstract(ABC):
+    @classmethod
+    @abstractmethod
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
+
+class Interface(Protocol):
+    @classmethod
+    def missing() -> None: ...  # E: Class method `missing` must accept the class as its first positional parameter
+
+class Overloaded:
+    @classmethod
+    @overload
+    def method() -> None: ...  # E: Class method `method` must accept the class as its first positional parameter
+    @classmethod
+    @overload
+    def method(cls, x: int) -> None: ...
+    @classmethod
+    def method(*args: object, **kwargs: object) -> None: ...
+"#,
+);
+
+testcase!(
+    test_classmethod_receiver_capacity,
+    r#"
+class C:
+    @classmethod
+    def conventional(cls) -> None: ...
+
+    @classmethod
+    def unconventional(klass) -> None: ...
+
+    @classmethod
+    def positional_only(klass, /) -> None: ...
+
+    @classmethod
+    def variadic(*args: object) -> None: ...
+
+    @classmethod
+    def variadic_keywords(*args: object, **kwargs: object) -> None: ...
+
+    def __init_subclass__(cls) -> None: ...
+
+    def __class_getitem__(*args: object) -> None: ...
+
+C.conventional()
+C.unconventional()
+C.positional_only()
+C.variadic(1)
+C.variadic_keywords(x=1)
+"#,
+);
+
+testcase!(
+    test_classmethod_receiver_decorator_combinations,
+    r#"
+from typing import Any, Callable, final, no_type_check
+
+def add_receiver(f: Callable[[], None]) -> Callable[[object], None]:
+    def wrapper(cls: object) -> None:
+        f()
+    return wrapper
+
+unknown: Any = lambda f: f
+
+class C:
+    @classmethod
+    @add_receiver
+    def wrapped() -> None: ...
+
+    @classmethod
+    @unknown
+    def uncertain() -> None: ...
+
+    @classmethod
+    @no_type_check
+    def unchecked() -> None: ...  # E: Class method `unchecked` must accept the class as its first positional parameter
+
+    @staticmethod
+    def static() -> None: ...
+
+    @classmethod
+    @staticmethod
+    def mixed() -> None: ...
+
+    @staticmethod
+    @classmethod
+    def reversed() -> None: ...
+
+    @classmethod
+    @property
+    def descriptor() -> None: ...
+
+    @classmethod
+    @final
+    def inner() -> None: ...  # E: Class method `inner` must accept the class as its first positional parameter
+
+    @final
+    @classmethod
+    def outer() -> None: ...  # E: Class method `outer` must accept the class as its first positional parameter
+
+C.wrapped()
+"#,
+);
+
 testcase!(
     test_abstract_classmethod,
     r#"
