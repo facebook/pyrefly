@@ -5945,6 +5945,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 })
             }
             (
+                ClassAttribute::Property(getter, None, _),
+                ClassAttribute::ReadWrite(..) | ClassAttribute::ReadOnly(..),
+            ) if getter
+                .toplevel_func_metadata()
+                .is_some_and(|meta| meta.flags.is_cached_property) =>
+            {
+                let value = self.call_property_getter(
+                    getter.clone(),
+                    TextRange::default(),
+                    &self.error_swallower(),
+                    None,
+                );
+                self.is_class_attribute_subset(
+                    &ClassAttribute::read_write(value),
+                    want,
+                    allow_property_override,
+                    is_subset,
+                )
+            }
+            (
                 ClassAttribute::Property(_, _, _),
                 ClassAttribute::ReadOnly(..) | ClassAttribute::ReadWrite(..),
             ) => Err(Box::new(AttrSubsetError::Property)),
