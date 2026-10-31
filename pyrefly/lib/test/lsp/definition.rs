@@ -2433,7 +2433,6 @@ Definition Result:
     );
 }
 
-// BUG: A __slots__ entry has no definition target. It should resolve to self.foo (issue #4344).
 #[test]
 fn dunder_slots_entry_definition_test() {
     let code = r#"
@@ -2450,7 +2449,9 @@ class C:
 # main.py
 3 |     __slots__ = ("foo",)
                        ^
-Definition Result: None
+Definition Result:
+7 |         self.foo = 1
+                 ^^^
 "#
         .trim(),
         report.trim(),
