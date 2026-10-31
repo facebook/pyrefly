@@ -925,6 +925,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             kw_only,
             init_by_name: dataclass_metadata.init_defaults.init_by_name || alias.is_none(),
             init_by_alias: alias,
+            pydantic_unchecked_metadata: false,
             lt,
             gt,
             ge,

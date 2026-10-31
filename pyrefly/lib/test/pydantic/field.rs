@@ -44,7 +44,6 @@ Outer.model_validate({"items": [{"x": -1}]})  # E: violates Pydantic `ge` constr
 );
 
 pydantic_testcase!(
-    bug = "Before and plain validators invalidate raw input constraint checks",
     test_model_validate_transforming_field_validators,
     r#"
 from pydantic import BaseModel, Field, field_validator
@@ -60,8 +59,8 @@ class Before(BaseModel):
 class Child(Before):
     pass
 
-Before.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
-Child.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Before.model_validate({"x": -1})
+Child.model_validate({"x": -1})
 
 class Plain(BaseModel):
     x: int = Field(ge=0)
@@ -71,7 +70,7 @@ class Plain(BaseModel):
     def normalize(cls, value: object) -> int:
         return 1
 
-Plain.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Plain.model_validate({"x": -1})
 
 class Item(BaseModel):
     x: int = Field(ge=0)
@@ -85,13 +84,12 @@ class Wrapper(BaseModel):
     def normalize_child(cls, value: object) -> Item:
         return Item(x=1)
 
-Wrapper.model_validate({"child": {"x": -1}, "unchecked": 1})  # E: violates Pydantic `ge` constraint
+Wrapper.model_validate({"child": {"x": -1}, "unchecked": 1})
 Wrapper.model_validate({"child": {"x": 1}, "unchecked": -1})  # E: violates Pydantic `ge` constraint
 "#,
 );
 
 pydantic_testcase!(
-    bug = "Wildcard and annotated validators invalidate raw input checks",
     test_model_validate_additional_input_validators,
     r#"
 from typing import Annotated
@@ -111,8 +109,8 @@ class Wildcard(BaseModel):
 class WildcardChild(Wildcard):
     pass
 
-Wildcard.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
-WildcardChild.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Wildcard.model_validate({"x": -1})
+WildcardChild.model_validate({"x": -1})
 
 class Assigned(BaseModel):
     x: Annotated[int, BeforeValidator(positive)] = Field(ge=0)
@@ -123,9 +121,9 @@ class AnnotationOnly(BaseModel):
 class Plain(BaseModel):
     x: Annotated[int, Field(ge=0), PlainValidator(positive)]
 
-Assigned.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
-AnnotationOnly.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
-Plain.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Assigned.model_validate({"x": -1})
+AnnotationOnly.model_validate({"x": -1})
+Plain.model_validate({"x": -1})
 "#,
 );
 

@@ -812,6 +812,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 TypeFormContext::ClassVarAnnotation,
                 &self.error_swallower(),
             );
+            let has_unchecked_metadata = metadata_items.iter().any(|item| {
+                let Expr::Call(call) = item else {
+                    return true;
+                };
+                let func = self.expr_infer(&call.func, &self.error_swallower());
+                !func
+                    .callee_kind()
+                    .is_some_and(|kind| dm.kind.field_specifiers().contains(&kind))
+            });
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
@@ -821,6 +830,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     keywords = Some(field_keywords);
                     break;
                 }
+            }
+            if has_unchecked_metadata {
+                keywords
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .pydantic_unchecked_metadata = true;
             }
             let strict =
                 self.pydantic_strict_from_annotation(annotation_expr, &self.error_swallower());
@@ -1007,6 +1021,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 for (name, field, flags) in
                     self.iter_fields(cls, dataclass, true, &kw_only_by_class)
                 {
+                    if flags.pydantic_unchecked_metadata
+                        || dataclass.pydantic_before_validator_fields.contains(&name)
+                        || dataclass
+                            .pydantic_before_validator_fields
+                            .contains(&Name::new_static("*"))
+                    {
+                        continue;
+                    }
                     let alias = flags
                         .init_by_alias
                         .as_ref()

@@ -1815,6 +1815,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .map(|flags| DataclassFieldKeywords {
                         default: flags.default,
                         strict: flags.strict,
+                        pydantic_unchecked_metadata: flags.pydantic_unchecked_metadata,
                         ..DataclassFieldKeywords::new()
                     });
                 if metadata.is_protocol()
@@ -1880,6 +1881,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .take()
                             .or_else(|| annotation_flags.default.clone());
                         f.strict = f.strict.or(annotation_flags.strict);
+                        f.pydantic_unchecked_metadata |=
+                            annotation_flags.pydantic_unchecked_metadata;
                     }
                     if flags.is_some() {
                         // A field specifier with no type annotation is a definition-time error,
