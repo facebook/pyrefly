@@ -392,6 +392,12 @@ class D(ident(list[T]), Generic[params.T]):  # E: Type variable `T` is not in sc
     pass
 
 assert_type(D[int]()[0], Any)
+
+class Factory(Generic[params.T]):
+    def __new__(cls) -> type[list[params.T]]: ...
+
+class E(Factory[params.T](), Generic[params.T]): ...  # E: Type variable `T` is not in scope
+assert_type(E[int]()[0], Any)
     "#,
 );
 
@@ -403,6 +409,278 @@ def factory(name: str) -> type[int]:
 
 class C(factory(1)):  # E: Argument `Literal[1]` is not assignable to parameter `name` with type `str`
     pass
+    "#,
+);
+
+testcase!(
+    bug = "Constructor callees erase class-bound legacy TypeVars",
+    test_call_base_constructor_legacy_typevar,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+
+class Factory(Generic[T]):
+    def __new__(cls) -> type[list[T]]: ...
+
+class C(Factory[T](), Generic[T]):  # E: Type variable `T` is not in scope
+    pass
+
+assert_type(C[int]()[0], Any)
+
+def ident[S](x: type[S]) -> type[S]: ...
+class D(ident(Factory[T]()), Generic[T]): ...  # E: Type variable `T` is not in scope
+assert_type(D[str]()[0], Any)
+class E(type(Factory[T]()), Generic[T]): ...  # E: Type variable `T` is not in scope
+assert_type(E[int]()[0], Any)
+    "#,
+);
+
+testcase!(
+    test_call_base_constructor_pep695,
+    r#"
+from typing import assert_type
+
+class Factory[T]:
+    def __new__(cls) -> type[list[T]]: ...
+
+class C[T](Factory[T]()):
+    pass
+
+assert_type(C[int]()[0], int)
+assert_type(C[str]()[0], str)
+    "#,
+);
+
+testcase!(
+    bug = "Constructor callees erase class-bound ParamSpecs",
+    test_call_base_constructor_paramspec,
+    r#"
+from typing import Generic, ParamSpec, assert_type
+
+P = ParamSpec("P")
+class Callback(Generic[P]):
+    def run(self, *args: P.args, **kwargs: P.kwargs) -> int: ...
+
+class Factory(Generic[P]):
+    def __new__(cls) -> type[Callback[P]]: ...
+
+class C(Factory[P](), Generic[P]): ...  # E: Type variable `P` is not in scope
+
+def check(x: C[[str, int]]) -> None:
+    assert_type(x.run("x", 1), int)
+    x.run(1, 1)
+    "#,
+);
+
+testcase!(
+    bug = "Constructor callees erase class-bound TypeVarTuples",
+    test_call_base_constructor_typevartuple,
+    r#"
+from typing import Generic, TypeVarTuple, Unpack, assert_type
+
+Ts = TypeVarTuple("Ts")
+class Factory(Generic[Unpack[Ts]]):
+    def __new__(cls) -> type[tuple[Unpack[Ts]]]: ...
+
+class C(Factory[Unpack[Ts]](), Generic[Unpack[Ts]]): ...  # E: Type variable `Ts` is not in scope
+assert_type(C[int, str]()[0], object)
+assert_type(C[int, str]()[1], object)
+    "#,
+);
+
+testcase!(
+    bug = "Constructor type arguments and runtime values need separate scoping",
+    test_call_base_constructor_runtime_typevar,
+    r#"
+from typing import Any, Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+class Factory(Generic[T]):
+    def __new__(cls, tv: TypeVar) -> type[list[T]]: ...
+
+class C(Factory[T](T), Generic[T]): ...  # E: Type variable `T` is not in scope
+assert_type(C[str]()[0], Any)
+    "#,
+);
+
+testcase!(
+    test_call_base_binding_order,
+    r#"
+from typing import assert_type
+
+class Mixin:
+    def greet(self) -> str: ...
+class Meta(type): ...
+
+def factory(meta: type) -> type[Mixin]: ...
+class C(factory(M := Meta), metaclass=M): pass
+assert_type(C().greet(), str)
+
+class Parent: ...
+def save(base: type) -> type[Mixin]: ...
+class D(save(B := Parent), B): pass
+assert_type(D().greet(), str)
+    "#,
+);
+
+testcase!(
+    test_call_base_lambda_and_comprehension_shadowing,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+def factory(x: type[int]) -> type[list[int]]: ...
+
+# Local values named T must not be rebound to the class's type parameter.
+class Lambda(factory((lambda T: T)(int)), Generic[T]): pass
+assert_type(Lambda[str]()[0], int)
+
+class Comprehension(factory([T for T in [int]][0]), Generic[T]): pass
+assert_type(Comprehension[str]()[0], int)
+    "#,
+);
+
+testcase!(
+    test_call_base_class_dependencies,
+    r#"
+from typing import Any, assert_type
+
+class Mixin:
+    def greet(self) -> str: ...
+
+# Argument checking depends on the metadata of the class being defined.
+def factory(x: "C | int") -> type[Mixin]: ...
+
+class C(factory(1)): pass
+assert_type(C().greet(), str)
+
+# Return inference depends on the class being defined. A union of two
+# distinct classes is still invalid, even when inference encounters a cycle.
+def inferred_factory(flag: bool):
+    if flag:
+        return Mixin
+    return D
+
+class D(inferred_factory(True)): ...  # E: Invalid base class:
+assert_type(D().greet(), Any)
+    "#,
+);
+
+testcase!(
+    test_call_base_generic_factories,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T", bound=int)
+S = TypeVar("S", int, str)
+
+def ident[U](x: type[U]) -> type[U]: ...
+
+class Bounded(ident(list[T]), Generic[T]): pass
+assert_type(Bounded[int]()[0], int)
+
+class Constrained(ident(list[S]), Generic[S]): pass
+assert_type(Constrained[str]()[0], str)
+
+class Pep695[T](ident(list[T])): pass
+assert_type(Pep695[int]()[0], int)
+
+def generic_outer[T](x: T):
+    class Inner(ident(list[T])): pass
+    assert_type(Inner()[0], T)
+    "#,
+);
+
+testcase!(
+    test_call_base_overloaded_callable_and_wrapped_factories,
+    r#"
+from typing import Literal, assert_type, cast, overload
+
+class Mixin:
+    def greet(self) -> str: ...
+
+class Other: ...
+
+@overload
+def select(x: Literal[True]) -> type[Mixin]: ...
+@overload
+def select(x: Literal[False]) -> type[Other]: ...
+def select(x: bool) -> type[Mixin] | type[Other]: ...
+
+class Selected(select(True)): pass
+assert_type(Selected().greet(), str)
+
+class CallableFactory:
+    def __call__(self) -> type[Mixin]: ...
+
+make = CallableFactory()
+class CallableChild(make()): pass
+assert_type(CallableChild().greet(), str)
+
+class Wrapped(cast(type[Mixin], Mixin)): pass
+assert_type(Wrapped().greet(), str)
+    "#,
+);
+
+testcase!(
+    test_call_base_invalid_returns,
+    r#"
+from typing import Literal, Never
+
+class Mixin: ...
+class Other: ...
+
+def instance_factory() -> Mixin: ...
+def none_factory() -> None: ...
+def never_factory() -> Never: ...
+def union_factory() -> type[Mixin] | type[Other]: ...
+def literal_factory() -> Literal[1]: ...
+
+class Instance(instance_factory()): ...  # E: Expected a type form, got instance of `Mixin`  # E: Invalid base class: `Mixin`
+class Null(none_factory()): ...  # E: Invalid base class: `None`
+class Bottom(never_factory()): ...  # E: Expected a type form, got instance of `Never`  # E: Invalid base class: `Never`
+class Union(union_factory()): ...  # E: Invalid base class: `Mixin | Other`
+class Lit(literal_factory()): ...  # E: Expected a type form, got instance of `Literal[1]`  # E: Invalid base class: `Literal[1]`
+    "#,
+);
+
+testcase!(
+    test_call_base_final_and_protocol,
+    r#"
+from typing import Protocol, assert_type, final
+
+@final
+class Final: ...
+
+def final_factory() -> type[Final]: ...
+class FinalChild(final_factory()): ...  # E: Cannot extend final class `Final`
+
+class P(Protocol):
+    def greet(self) -> str: ...
+
+def protocol_factory() -> type[P]: ...
+class Concrete(protocol_factory()):
+    def greet(self) -> str: return "hi"
+
+assert_type(Concrete().greet(), str)
+    "#,
+);
+
+testcase!(
+    test_call_base_runtime_typevar_arguments,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+T = TypeVar("T")
+class Mixin:
+    def greet(self) -> str: ...
+
+def factory(x: TypeVar) -> type[Mixin]: ...
+
+# A TypeVar passed as a runtime value is not a type argument.
+class C(factory(T), Generic[T]): pass
+assert_type(C[int]().greet(), str)
     "#,
 );
 
