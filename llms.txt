@@ -7,7 +7,7 @@
 - [Bazel Integration](/en/docs/bazel/): Run Pyrefly type checking over Bazel Python targets with rules_pyrefly
 - [Mypy vs Pyright vs Pyrefly](/en/docs/compare/): Compare mypy, Pyright, and Pyrefly for Python type checking, IDE support, configuration, framework support, strictness, and migration cost.
 - [Configuration](/en/docs/configuration/): Configure Pyrefly settings and options
-- [DataFrames](/en/docs/dataframes/): Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
+- [DataFrames](/en/docs/dataframes/): Pyrefly support for Polars, Narwhals, and pandas DataFrames, including column and dtype inference.
 - [Django Support](/en/docs/django/): Pyrefly support for Django ORM.
 - [Pyrefly Error Kinds](/en/docs/error-kinds/): Pyrefly error categories and suppression codes
 - [Pyrefly Error Suppressions](/en/docs/error-suppressions/): Learn how to suppress type check errors in Pyrefly with code comments and baseline files.

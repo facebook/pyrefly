@@ -2305,6 +2305,11 @@ or remove `project-excludes`.
       we recommend you pull and set up your dependency from GitHub, but you can achieve
       this on files in your `site-packages-path` by setting `site-packages-path = []` in
       your config.
+    - `--exclude-scripts` also skips the PEP 723 scripts (files with a `# /// script`
+      block) that Pyrefly finds in the project or in the given directories, and still
+      checks the files that you give explicitly. A script runs in its own environment, so
+      `uv check --type-checker pyrefly` passes `--exclude-scripts` and checks a script
+      with `uv check --script`.
 
 ### `disable-project-excludes-heuristics`
 
@@ -2854,8 +2859,9 @@ extends = "pyproject.toml"
 ### `required-version`
 
 Enforces a requirement on the version of Pyrefly at runtime. Pyrefly reports a
-configuration error if its version does not satisfy the requirement. This can
-keep local CLI runs, editor integrations, and CI on compatible versions.
+configuration error if its version does not satisfy the requirement. When this
+error stops `pyrefly check`, it exits with code 4. This can keep local CLI runs,
+editor integrations, and CI on compatible versions.
 
 ```toml
 # pyrefly.toml
@@ -4007,7 +4013,7 @@ assert-type = false
 
 ---
 title: DataFrames
-description: Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
+description: Pyrefly support for Polars, Narwhals, and pandas DataFrames, including column and dtype inference.
 ---
 
 {/*
@@ -4041,8 +4047,9 @@ Inline comments show how Pyrefly can infer additional information for DataFrames
 and Series.
 
 Pyrefly includes **built-in support** for DataFrames from
-[Polars](https://docs.pola.rs/) and
-[pandas](https://pandas.pydata.org/docs/), two popular Python libraries for
+[Polars](https://docs.pola.rs/),
+[Narwhals](https://narwhals-dev.github.io/narwhals/), and
+[pandas](https://pandas.pydata.org/docs/), three popular Python libraries for
 working with tabular data. Pyrefly tracks column names and data types (dtypes),
 reports accesses to columns that cannot exist, and follows schema changes
 through common operations.
@@ -4054,7 +4061,7 @@ through common operations.
 DataFrame inference works automatically in Pyrefly, without any special
 configuration.
 
-1. Install `polars` or `pandas` in your Python environment.
+1. Install `polars`, `narwhals`, or `pandas` in your Python environment.
 2. Install `pyrefly`.
 3. Write DataFrame code as usual.
 4. Run Pyrefly or use the Pyrefly language server in your editor.
@@ -4128,10 +4135,11 @@ Pyrefly infers a dtype for every known column by following the library's
 widening and coercion rules. When no dtype can be determined, the column keeps
 its name and takes the `Unknown` dtype, so an access returns `Series[Unknown]`.
 
-### How Polars and pandas Are Treated Differently
+### How the Libraries Are Treated Differently
 
-The two libraries get different levels of precision because they offer different
-mutation guarantees.
+The libraries get different levels of precision because they offer different
+mutation guarantees. Narwhals exposes a subset of the Polars API with the same
+semantics, so Pyrefly treats Narwhals frames like Polars frames.
 
 In Polars, the common transformations such as `select`, `drop`, `rename`, and
 `with_columns` are immutable and return a new DataFrame with a transformed
@@ -4154,10 +4162,11 @@ one.
 
 ## Supported Features
 
-For brevity, the examples below omit the imports for `polars`, `pandas`, and the
-`typing` names they use, such as `reveal_type` and `Literal`. Unless a section
-says otherwise, these features are Polars only. pandas support is described in
-[pandas Support](#pandas-support).
+For brevity, the examples below omit the imports for `polars`, `narwhals`,
+`pandas`, and the `typing` names they use, such as `reveal_type` and `Literal`.
+Unless a section says otherwise, these features are Polars only. Narwhals
+support is described in [Narwhals Support](#narwhals-support), and pandas
+support in [pandas Support](#pandas-support).
 
 ### DataFrame Construction
 
@@ -4557,11 +4566,62 @@ df.insert_column(1, pl.Series("active", [True]))
 reveal_type(df)  # DataFrame[name: String, active: Unknown, age: Int64]
 ```
 
+### Narwhals Support
+
+[Narwhals](https://narwhals-dev.github.io/narwhals/) is a compatibility layer
+that exposes a subset of the Polars API over several backends, with the same
+method semantics and dtypes. The features above also apply to Narwhals frames,
+for the methods Narwhals has. Pyrefly treats frames from `narwhals.stable.v1`
+and `narwhals.stable.v2` the same way as frames from `narwhals`.
+
+Narwhals has no public frame constructor, and Pyrefly does not model
+`from_native`, `from_dict`, or the Narwhals IO functions, so those calls produce
+an opaque frame. A Narwhals frame gets a schema only from a
+[schema declaration](#schema-declaration) on a parameter or return type.
+
+```python
+class Sales:
+    region: nw.String
+    units: nw.Int64
+
+def process(df: Annotated[nw.DataFrame, Sales]) -> None:
+    reveal_type(df)  # DataFrame[region: String, units: Int64]
+    reveal_type(df.select("units"))  # DataFrame[units: Int64]
+    df["missing"]  # Error unknown-column
+```
+
+A Polars frame does not satisfy a Narwhals schema declaration, and a Narwhals
+frame does not satisfy a Polars one. Methods that Narwhals lacks, such as
+frame-level `fill_null` and the in-place column APIs, are supported only on
+Polars frames.
+
+Narwhals does not guarantee the dtype of every computed column, so Pyrefly
+infers the dtype of an arithmetic expression or aggregation only when every
+numeric input and the result are `Int64` or `Float64`. Otherwise the column has
+the `Unknown` dtype. Integer sums, powers, bitwise operations, and `nw.len()`
+are `Unknown` even on `Int64` columns. Comparisons, casts, `min`,
+`max`, `first`, and `last` keep their dtype.
+
+```python
+class Sales:
+    region: nw.String
+    units: nw.Int64
+    discount: nw.Float32
+
+def summarize(df: Annotated[nw.DataFrame, Sales]) -> None:
+    out = df.group_by("region").agg(
+        nw.col("units").mean(),
+        nw.col("discount").mean(),
+        nw.col("units").sum().alias("total"),
+        nw.len(),
+    )
+    reveal_type(out)  # DataFrame[region: String, units: Float64, discount: Unknown, total: Unknown, len: Unknown]
+```
+
 ### pandas Support
 
-Everything above this section describes Polars. pandas gets a smaller feature
-set, because its open-ended mutation model means an inferred schema is always
-partial.
+pandas gets a smaller feature set than Polars and Narwhals, because its
+open-ended mutation model means an inferred schema is always partial.
 
 Pyrefly infers visible primitive columns from a pandas dictionary constructor
 passed positionally or through `data=`. A static `columns=` list projects and
@@ -4594,8 +4654,8 @@ configuration.
 - [`unknown-column`](../error-kinds/#unknown-column) reports a statically known
   name that is absent from a complete schema.
 - [`column-type-mismatch`](../error-kinds/#column-type-mismatch) reports a
-  strict Polars construction value that does not fit the dtype established by
-  the first non-null value.
+  strict Polars or Narwhals construction value that does not fit the dtype
+  established by the first non-null value.
 - [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
   statically known data names that do not match declared schema names.
 - [`duplicate-column`](../error-kinds/#duplicate-column) reports an operation
@@ -4991,7 +5051,7 @@ diagnostics correspond to the kinds below.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
-- **hint**: the diagnostic shows up as a faint hint in the IDE, and `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
+- **hint**: in the IDE, unused code is greyed out and deprecated names are struck through, and any other diagnostic set to `hint` shows up blue like `info`. `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
 - **info**: the diagnostic shows up blue in the IDE
 - **warn**: the diagnostic shows up yellow in the IDE
 - **error**: the diagnostic shows up red in the IDE

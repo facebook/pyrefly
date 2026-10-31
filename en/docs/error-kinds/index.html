@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.8e9df58b.css">
-<script src="/assets/js/runtime~main.5ed9b8b8.js" defer="defer"></script>
-<script src="/assets/js/main.49c804d1.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.64c356b1.js" defer="defer"></script>
+<script src="/assets/js/main.374c333d.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -57,7 +57,7 @@ diagnostics correspond to the kinds below.</p>
 <p>Diagnostics have several possible severity levels, which can be <a href="/en/docs/configuration/#errors">configured</a> in <code>pyrefly.toml</code> or via CLI:</p>
 <ul>
 <li><strong>ignore</strong>: the diagnostic is not emitted</li>
-<li><strong>hint</strong>: the diagnostic shows up as a faint hint in the IDE, and <code>pyrefly check</code> doesn&#x27;t mention it unless <code>--min-severity hint</code> is passed</li>
+<li><strong>hint</strong>: in the IDE, unused code is greyed out and deprecated names are struck through, and any other diagnostic set to <code>hint</code> shows up blue like <code>info</code>. <code>pyrefly check</code> doesn&#x27;t mention it unless <code>--min-severity hint</code> is passed</li>
 <li><strong>info</strong>: the diagnostic shows up blue in the IDE</li>
 <li><strong>warn</strong>: the diagnostic shows up yellow in the IDE</li>
 <li><strong>error</strong>: the diagnostic shows up red in the IDE</li>

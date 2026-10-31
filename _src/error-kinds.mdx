@@ -26,7 +26,7 @@ diagnostics correspond to the kinds below.
 
 Diagnostics have several possible severity levels, which can be [configured](../configuration#errors) in `pyrefly.toml` or via CLI:
 - **ignore**: the diagnostic is not emitted
-- **hint**: the diagnostic shows up as a faint hint in the IDE, and `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
+- **hint**: in the IDE, unused code is greyed out and deprecated names are struck through, and any other diagnostic set to `hint` shows up blue like `info`. `pyrefly check` doesn't mention it unless `--min-severity hint` is passed
 - **info**: the diagnostic shows up blue in the IDE
 - **warn**: the diagnostic shows up yellow in the IDE
 - **error**: the diagnostic shows up red in the IDE
