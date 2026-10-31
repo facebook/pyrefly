@@ -8,7 +8,6 @@
 use crate::pydantic_testcase;
 
 pydantic_testcase!(
-    bug = "Annotation aliases and nonliteral validator modes lose uncertainty",
     test_model_validate_alias_and_mode_uncertainty,
     r#"
 from typing import Annotated, Literal
@@ -19,7 +18,7 @@ Positive = Annotated[int, BeforeValidator(abs)]
 class Aliased(BaseModel):
     x: Positive = Field(ge=0)
 
-Aliased.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Aliased.model_validate({"x": -1})
 
 MODE: Literal["before"] = "before"
 
@@ -31,6 +30,6 @@ class Configured(BaseModel):
     def normalize(cls, value: int) -> int:
         return abs(value)
 
-Configured.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Configured.model_validate({"x": -1})
 "#,
 );

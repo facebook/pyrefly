@@ -8,7 +8,6 @@
 use crate::pydantic_testcase;
 
 pydantic_testcase!(
-    bug = "Nested annotations and composed Field metadata are not interpreted",
     test_model_validate_nested_schema_uncertainty,
     r#"
 from typing import Annotated
@@ -23,22 +22,21 @@ def normalize(value: object) -> Item:
 class Outer(BaseModel):
     items: list[Annotated[Item, BeforeValidator(normalize)]]
 
-Outer.model_validate({"items": [{"x": -1}]})  # E: violates Pydantic `ge` constraint
+Outer.model_validate({"items": [{"x": -1}]})
 
 class Multiple(BaseModel):
     x: Annotated[int, Field(ge=0), Field(ge=-10)]
 
-Multiple.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Multiple.model_validate({"x": -1})
 
 class AssignedAlias(BaseModel):
     x: Annotated[int, Field(validation_alias="y")] = Field(ge=0)
 
-AssignedAlias.model_validate({"x": -1, "y": 1})  # E: violates Pydantic `ge` constraint
+AssignedAlias.model_validate({"x": -1, "y": 1})
 "#,
 );
 
 pydantic_testcase!(
-    bug = "Wrapping, model, aliased validators and custom init can transform input",
     test_model_validate_custom_validation_schema,
     r#"
 from typing import Any
@@ -52,7 +50,7 @@ class Aliased(BaseModel):
     def normalize(cls, value: int) -> int:
         return abs(value)
 
-Aliased.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Aliased.model_validate({"x": -1})
 
 class Wrapped(BaseModel):
     x: int = Field(ge=0)
@@ -62,7 +60,7 @@ class Wrapped(BaseModel):
     def normalize(cls, value: int, handler: Any) -> int:
         return handler(abs(value))
 
-Wrapped.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Wrapped.model_validate({"x": -1})
 
 class ModelBefore(BaseModel):
     x: int = Field(ge=0)
@@ -75,8 +73,8 @@ class ModelBefore(BaseModel):
 class Child(ModelBefore):
     pass
 
-ModelBefore.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
-Child.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+ModelBefore.model_validate({"x": -1})
+Child.model_validate({"x": -1})
 
 class CustomInit(BaseModel):
     x: int = Field(ge=0)
@@ -84,12 +82,11 @@ class CustomInit(BaseModel):
     def __init__(self, **data: Any) -> None:
         super().__init__(x=1)
 
-CustomInit.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+CustomInit.model_validate({"x": -1})
 "#,
 );
 
 pydantic_testcase!(
-    bug = "Unmodeled model alias configuration is confused with defaults",
     test_model_validate_unmodeled_alias_config,
     r#"
 from pydantic import BaseModel, ConfigDict, Field
@@ -101,7 +98,7 @@ class Generated(BaseModel):
     model_config = ConfigDict(alias_generator=alias)
     x: int = Field(ge=0)
 
-Generated.model_validate({"x": -1, "y": 1})  # E: violates Pydantic `ge` constraint
+Generated.model_validate({"x": -1, "y": 1})
 
 flag = False
 
@@ -109,6 +106,6 @@ class Dynamic(BaseModel):
     model_config = ConfigDict(validate_by_alias=flag, validate_by_name=True)
     x: int = Field(ge=0, alias="y")
 
-Dynamic.model_validate({"x": 1, "y": -1})  # E: violates Pydantic `ge` constraint
+Dynamic.model_validate({"x": 1, "y": -1})
 "#,
 );

@@ -211,6 +211,7 @@ pub struct PydanticConfigDict {
     /// Deprecated compatibility option normalized during class metadata construction.
     pub populate_by_name: Option<bool>,
     pub alias_generator: Option<PydanticAliasGenerator>,
+    pub validation_uncertain: bool,
 }
 
 impl<'a> BindingsBuilder<'a> {
@@ -229,45 +230,57 @@ impl<'a> BindingsBuilder<'a> {
         None
     }
 
-    /// Scan a class body for `@field_validator(...)` decorators with `mode='before'` or
-    /// `mode='plain'`, and return the field names those validators target. When a before/plain
-    /// validator is present, the corresponding `__init__` parameter should accept `Any` because
-    /// the validator can transform arbitrary input into the declared type.
-    // TODO: `mode='wrap'` validators also receive raw input, but they additionally receive
-    // the inner validator as a callable. Supporting them requires more work.
+    /// Identify fields whose validators can change raw input. `*` also represents model
+    /// validators, which can replace the input to every field.
     pub fn extract_field_validator_fields(&self, body: &[Stmt]) -> Vec<Name> {
         body.iter()
             .filter_map(|stmt| stmt.as_function_def_stmt())
             .flat_map(|func_def| &func_def.decorator_list)
             .filter_map(|decorator| {
                 let call = decorator.expression.as_call_expr()?;
-                let is_field_validator = match &*call.func {
-                    Expr::Name(n) => n.id == FIELD_VALIDATOR,
-                    Expr::Attribute(a) => a.attr.id == FIELD_VALIDATOR,
-                    _ => false,
-                };
-                if !is_field_validator {
+                let kind = self.as_special_export(&call.func)?;
+                if !matches!(
+                    kind,
+                    SpecialExport::PydanticFieldValidator | SpecialExport::PydanticModelValidator
+                ) {
                     return None;
                 }
-                // Check for `mode='before'` or `mode='plain'` keyword.
-                let has_before_or_plain_mode = call.arguments.keywords.iter().any(|kw| {
-                    kw.arg.as_ref().is_some_and(|a| a.as_str() == "mode")
-                        && matches!(
-                            &kw.value,
-                            Expr::StringLiteral(s)
-                                if matches!(s.value.to_str(), "before" | "plain")
-                        )
+                let transforms_input = call.arguments.keywords.iter().any(|kw| {
+                    let Some(name) = &kw.arg else {
+                        return true;
+                    };
+                    name.as_str() == "mode"
+                        && match &kw.value {
+                            Expr::StringLiteral(s) => s.value.to_str() != "after",
+                            _ => true,
+                        }
                 });
-                if !has_before_or_plain_mode {
+                if !transforms_input {
                     return None;
                 }
-                Some(&call.arguments.args)
+                Some(
+                    if kind == SpecialExport::PydanticModelValidator
+                        || call.arguments.keywords.iter().any(|kw| kw.arg.is_none())
+                        || call
+                            .arguments
+                            .args
+                            .iter()
+                            .any(|arg| arg.as_string_literal_expr().is_none())
+                    {
+                        vec![Name::new_static("*")]
+                    } else {
+                        call.arguments
+                            .args
+                            .iter()
+                            .filter_map(|arg| {
+                                arg.as_string_literal_expr()
+                                    .map(|s| Name::new(s.value.to_str()))
+                            })
+                            .collect()
+                    },
+                )
             })
             .flatten()
-            .filter_map(|arg| {
-                arg.as_string_literal_expr()
-                    .map(|s| Name::new(s.value.to_str()))
-            })
             .collect()
     }
 
@@ -284,10 +297,29 @@ impl<'a> BindingsBuilder<'a> {
         name: &Hashed<Name>,
         pydantic_config_dict: &mut PydanticConfigDict,
     ) {
-        if name.as_str() == "model_config"
-            && let Some(pydantic_config_expr) = self.get_pydantic_config_expr(e)
-        {
+        if name.as_str() != "model_config" {
+            return;
+        }
+        if let Some(pydantic_config_expr) = self.get_pydantic_config_expr(e) {
+            pydantic_config_dict.validation_uncertain |= match &pydantic_config_expr {
+                PydanticConfigExpr::ExprCall(call) => {
+                    call.arguments.keywords.iter().any(|kw| kw.arg.is_none())
+                }
+                PydanticConfigExpr::ExprDict(dict) => dict.items.iter().any(|item| {
+                    item.key
+                        .as_ref()
+                        .and_then(Expr::as_string_literal_expr)
+                        .is_none()
+                }),
+            };
             for (name, value) in pydantic_config_expr.iter() {
+                if matches!(
+                    name,
+                    "validate_by_name" | "validate_by_alias" | "populate_by_name"
+                ) && !matches!(value, Expr::BooleanLiteral(_) | Expr::NoneLiteral(_))
+                {
+                    pydantic_config_dict.validation_uncertain = true;
+                }
                 if name == FROZEN
                     && let Expr::BooleanLiteral(bl) = value
                 {
@@ -321,8 +353,13 @@ impl<'a> BindingsBuilder<'a> {
                     pydantic_config_dict.populate_by_name = Some(bl.value);
                 } else if name == ALIAS_GENERATOR {
                     pydantic_config_dict.alias_generator = self.extract_alias_generator(value);
+                    pydantic_config_dict.validation_uncertain |=
+                        pydantic_config_dict.alias_generator.is_none()
+                            && !matches!(value, Expr::NoneLiteral(_));
                 }
             }
+        } else {
+            pydantic_config_dict.validation_uncertain = true;
         }
     }
 }

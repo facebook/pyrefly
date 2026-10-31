@@ -1816,7 +1816,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         default: flags.default,
                         strict: flags.strict,
                         pydantic_unknown_validation_alias: flags.pydantic_unknown_validation_alias,
-                        pydantic_unchecked_metadata: flags.pydantic_unchecked_metadata,
+                        pydantic_unchecked_metadata: flags.pydantic_unchecked_metadata
+                            || flags.init_by_alias.is_some(),
                         ..DataclassFieldKeywords::new()
                     });
                 if metadata.is_protocol()

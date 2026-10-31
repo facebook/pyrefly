@@ -16,6 +16,8 @@ use crate::binding::pydantic::PydanticAliasGenerator;
 pub struct PydanticValidationFlags {
     pub validate_by_name: Option<bool>,
     pub validate_by_alias: Option<bool>,
+    /// Model validation configuration was present but could not be interpreted.
+    pub uncertain: bool,
 }
 
 impl PydanticValidationFlags {

@@ -505,6 +505,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             validate_by_alias,
             populate_by_name,
             alias_generator,
+            validation_uncertain,
         } = pydantic_config_dict;
 
         // Note: class keywords take precedence over ConfigDict keywords.
@@ -548,6 +549,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let validation_flags = PydanticValidationFlags {
             validate_by_name: merged_validate_by_name,
             validate_by_alias: merged_validate_by_alias,
+            uncertain: *validation_uncertain
+                || bases_with_metadata.iter().any(|(_, metadata)| {
+                    metadata
+                        .dataclass_metadata()
+                        .is_some_and(|dm| dm.init_defaults.pydantic_validation_flags.uncertain)
+                })
+                || keywords.iter().any(|(name, value)| {
+                    matches!(
+                        name.as_str(),
+                        "validate_by_name" | "validate_by_alias" | "populate_by_name"
+                    ) && value.get_type().as_bool().is_none()
+                }),
         };
         let validation_alias_generator = alias_generator.clone().or_else(|| {
             self.find_inherited_keyword_value(bases_with_metadata, |dm| {
@@ -792,6 +805,69 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Preserve uncertainty before annotation metadata is erased from field types.
+    fn pydantic_unchecked_annotation(&self, annotation: &Expr, gas: &mut Gas) -> bool {
+        if gas.stop() {
+            return true;
+        }
+        if !self
+            .get_annotated_metadata(
+                annotation,
+                TypeFormContext::ClassVarAnnotation,
+                &self.error_swallower(),
+            )
+            .is_empty()
+        {
+            return true;
+        }
+        match annotation {
+            Expr::Subscript(subscript) => {
+                self.pydantic_unchecked_annotation(&subscript.value, gas)
+                    || self.pydantic_unchecked_annotation(&subscript.slice, gas)
+            }
+            Expr::Tuple(tuple) => tuple
+                .elts
+                .iter()
+                .any(|item| self.pydantic_unchecked_annotation(item, gas)),
+            Expr::BinOp(binary) => {
+                self.pydantic_unchecked_annotation(&binary.left, gas)
+                    || self.pydantic_unchecked_annotation(&binary.right, gas)
+            }
+            Expr::Name(name) => {
+                let key = Key::BoundName(ShortIdentifier::expr_name(name));
+                if let Some(mut idx) = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key)) {
+                    loop {
+                        if gas.stop() {
+                            return true;
+                        }
+                        match self.bindings().get(idx) {
+                            Binding::Forward(next)
+                            | Binding::PromoteForward(next)
+                            | Binding::ForwardToFirstUse(next) => idx = *next,
+                            Binding::TypeAlias(_)
+                            | Binding::NameAssign(_)
+                            | Binding::AnnotatedType(_, _) => return true,
+                            _ => break,
+                        }
+                    }
+                }
+                !matches!(
+                    self.expr_infer(annotation, &self.error_swallower()),
+                    Type::ClassDef(_)
+                )
+            }
+            Expr::Attribute(_) => !matches!(
+                self.expr_infer(annotation, &self.error_swallower()),
+                Type::ClassDef(_)
+            ),
+            Expr::NoneLiteral(_)
+            | Expr::NumberLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::EllipsisLiteral(_) => false,
+            _ => true,
+        }
+    }
+
     /// Extract Pydantic Field metadata from an annotation binding.
     /// This handles the Pydantic-specific pattern where fields can be declared as:
     /// `field: Annotated[some_type, Field(some_keyword=<value>)]`
@@ -812,15 +888,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 TypeFormContext::ClassVarAnnotation,
                 &self.error_swallower(),
             );
-            let has_unchecked_metadata = metadata_items.iter().any(|item| {
-                let Expr::Call(call) = item else {
-                    return true;
-                };
-                let func = self.expr_infer(&call.func, &self.error_swallower());
-                !func
-                    .callee_kind()
-                    .is_some_and(|kind| dm.kind.field_specifiers().contains(&kind))
-            });
+            let type_expr = match annotation_expr {
+                Expr::Subscript(subscript) if !metadata_items.is_empty() => {
+                    Ast::unpack_slice(&subscript.slice)
+                        .first()
+                        .unwrap_or(annotation_expr)
+                }
+                _ => annotation_expr,
+            };
+            let has_unchecked_metadata = self
+                .pydantic_unchecked_annotation(type_expr, &mut Gas::new(100))
+                || metadata_items.len() > 1
+                || metadata_items.iter().any(|item| {
+                    let Expr::Call(call) = item else {
+                        return true;
+                    };
+                    let func = self.expr_infer(&call.func, &self.error_swallower());
+                    !func
+                        .callee_kind()
+                        .is_some_and(|kind| dm.kind.field_specifiers().contains(&kind))
+                });
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
@@ -958,7 +1045,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         );
     }
 
-    /// Walk only concrete dictionary and list input, with a fixed work limit.
+    /// Walk inline dictionary and list input with a bounded number of recursive entries.
     fn check_pydantic_model_validate_input(
         &self,
         expected: &Type,
@@ -972,9 +1059,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // Named containers can be mutated or escape without rebinding their names.
         match expected {
-            Type::Annotated(expected, _) => {
-                self.check_pydantic_model_validate_input(expected, actual, validation, gas, errors);
-            }
+            // Annotated input can carry schema transformations that are not modeled here.
+            Type::Annotated(_, _) => {}
             Type::ClassType(expected)
                 if expected.class_object() == self.stdlib.list_object()
                     && let [expected] = expected.targs().as_slice()
@@ -997,6 +1083,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 else {
                     return;
                 };
+                if dataclass.init_defaults.pydantic_validation_flags.uncertain
+                    || !self
+                        .get_non_synthesized_class_member_and_defining_class(cls, &dunder::INIT)
+                        .is_some_and(|member| {
+                            member
+                                .defining_class
+                                .has_toplevel_qname(ModuleName::pydantic().as_str(), "BaseModel")
+                        })
+                {
+                    return;
+                }
                 if validation.validate_by_alias == Some(true)
                     && !dataclass
                         .init_defaults
