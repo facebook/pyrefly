@@ -1021,14 +1021,13 @@ reduce(max, [1,2])
 // https://github.com/facebook/pyrefly/issues/3265
 // All of these iterators should have element type int without diagnostics.
 testcase!(
-    bug = "iter loses element types for set and dict literals",
     test_iter_container_literal,
     r#"
 from typing import Iterator, assert_type
 
 assert_type(iter([0]), Iterator[int])
-assert_type(iter({0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
-assert_type(iter({0: 0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+assert_type(iter({0}), Iterator[int])
+assert_type(iter({0: 0}), Iterator[int])
 assert_type(iter([x for x in [0]]), Iterator[int])
 assert_type(iter({x for x in [0]}), Iterator[int])
 assert_type(iter({x: x for x in [0]}), Iterator[int])
