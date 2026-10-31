@@ -2444,6 +2444,54 @@ class C:
     __secret: int = 0
     def reveal(self, a: A):
         return a.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+
+class Outer:
+    __secret: int = 0
+
+    class Inner:
+        def reveal(self, outer: "Outer") -> int:
+            return outer.__secret  # E: Private attribute `__secret` cannot be accessed outside of its defining class
+"#,
+);
+
+testcase!(
+    test_protected_attribute_access,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+class A:
+    _protected: int = 0
+
+    def reveal(self, other: "A") -> int:
+        return self._protected + other._protected
+
+outside_instance = A()._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+outside_class = A._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class B(A):
+    inherited = A._protected
+
+    def reveal(self, other: A) -> int:
+        return self._protected + other._protected
+
+class Unrelated:
+    def leak(self, a: A) -> int:
+        return a._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_same_named_protected_attribute_from_unrelated_class,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+class A:
+    _protected: int = 0
+
+class B(A):
+    def leak(self, other: "Unrelated") -> int:
+        return other._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class Unrelated:
+    _protected: int = 0
 "#,
 );
 
@@ -4354,6 +4402,210 @@ def use(obj, a: Any, c: C) -> None:
     c.missing  # E: Object of class `C` has no attribute `missing`
     obj.attr = 1  # Assignment targets are not accesses.
     c.x
+"#,
+);
+
+testcase!(
+    test_protected_attribute_ignored_by_default,
+    r#"
+class A:
+    _protected: int = 0
+
+value = A()._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_dynamic_values,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+from typing import Any
+
+class Dynamic:
+    def __getattr__(self, name: str) -> Any: ...
+
+def outside(value: Any, cls: type[Any], dynamic: Dynamic):
+    value._protected
+    cls._protected
+    dynamic._protected
+
+class A:
+    _protected: int = 0
+
+    def inside(self, value: Any, cls: type[Any], dynamic: Dynamic):
+        value._protected
+        cls._protected
+        dynamic._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_from_stub,
+    {
+        let mut env = TestEnv::new().enable_protected_access_error();
+        env.add("source", "class SourceBase:\n    _protected: int = 0\n");
+        env.add_with_path(
+            "lib",
+            "lib.pyi",
+            "from source import SourceBase\nclass A:\n    _protected: int\n    __private: int\nclass StubDerived(SourceBase): ...\n",
+        );
+        env
+    },
+    r#"
+from lib import A, StubDerived
+
+value = A()._protected
+A()._protected = 1
+A().__private  # E: Private attribute `__private` cannot be accessed outside of its defining class
+StubDerived()._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class B:
+    def method(self, value: A):
+        return value._protected
+
+class Derived(A):
+    pass
+
+inherited = Derived()._protected
+
+class Override(A):
+    _protected: int = 1
+
+Override()._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+
+class Source:
+    _protected: int = 1
+
+def read(value: A | Source) -> int:
+    return value._protected  # E: Protected attribute `_protected` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_protected_attribute_on_bounded_type_variable,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+class A:
+    _protected: int = 0
+
+    def read[T: A](self, other: T) -> int:
+        return other._protected
+"#,
+);
+
+testcase!(
+    test_protected_attribute_quoted_cast_default,
+    r#"
+from typing import Any, assert_type, cast
+
+class Owner:
+    _value: int = 1
+
+def read(value: Any) -> None:
+    assert_type(cast("Owner", value)._value, int)
+    assert_type(cast(Owner, value)._value, int)
+"#,
+);
+
+testcase!(
+    test_protected_attribute_quoted_cast_enabled,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+from typing import Any, cast
+
+class Owner:
+    _value: int = 1
+
+def read(value: Any) -> None:
+    cast("Owner", value)._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+    cast(Owner, value)._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_protected_attribute_named_tuple_public_api,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+from collections import namedtuple
+from typing import NamedTuple
+from urllib.parse import urlsplit
+
+class Record(NamedTuple):
+    value: int
+
+    def _internal(self) -> int:
+        return self.value
+
+record = Record(1)
+record._replace(value=2)
+record._asdict()
+Record._make([1])
+record._fields
+Record._field_defaults
+record._internal()  # E: Protected attribute `_internal` cannot be accessed outside of its defining class or a subclass
+
+Row = namedtuple("Row", ["value"])
+Row(1)._replace(value=2)
+Row(1)._asdict()
+urlsplit("https://example.com/a")._replace(scheme="file")
+
+class Other:
+    def _replace(self) -> None: ...
+
+Other()._replace()  # E: Protected attribute `_replace` cannot be accessed outside of its defining class or a subclass
+"#,
+);
+
+testcase!(
+    test_protected_attribute_enclosing_class_scopes,
+    TestEnv::new().enable_protected_access_error(),
+    r#"
+from typing import assert_type
+
+class _CodeWriter:
+    _indent: int = 1
+
+    def indent(self):
+        class Indenter:
+            def __exit__(_, *args):
+                assert_type(self._indent, int)
+        return Indenter()
+
+class Base:
+    _value: int = 1
+
+class HeaderBase:
+    def __init_subclass__(cls, flag: int) -> None: ...
+
+class InHeader(Base, HeaderBase, flag=Base._value):  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+    pass
+
+class Derived(Base):
+    class Inner:
+        value = Base._value
+
+        def read(self, other: Base) -> int:
+            def nested() -> int:
+                return other._value
+            return nested()
+
+class Container:
+    class First:
+        _value: int = 1
+
+    class Second:
+        def read(self, other: "Container.First") -> int:
+            return other._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+
+class Unrelated:
+    class Inner:
+        def read(self, other: Base) -> int:
+            return other._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+
+def outside(other: Base) -> int:
+    def nested() -> int:
+        return other._value  # E: Protected attribute `_value` cannot be accessed outside of its defining class or a subclass
+    return nested()
 "#,
 );
 

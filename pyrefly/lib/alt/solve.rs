@@ -3394,6 +3394,71 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    fn check_protected_attribute_access(
+        &self,
+        expect: &PrivateAttributeAccessCheck,
+        value_type: &Type,
+        errors: &ErrorCollector,
+    ) {
+        let Some(owners) = expect
+            .class_idxs
+            .iter()
+            .map(|class_idx| self.get_idx(*class_idx).0.clone())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return;
+        };
+        let inaccessible = value_type.clone().into_unions().into_iter().any(|ty| {
+            let accessed_class = match ty {
+                Type::ClassDef(cls) => Some(cls),
+                Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.into_class_object()),
+                Type::Type(inner) => match *inner {
+                    Type::ClassType(cls) | Type::SelfType(cls) => Some(cls.into_class_object()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(accessed_class) = accessed_class else {
+                return false;
+            };
+            if matches!(
+                expect.attr.id.as_str(),
+                "_asdict" | "_field_defaults" | "_fields" | "_make" | "_replace"
+            ) && self
+                .get_metadata_for_class(&accessed_class)
+                .named_tuple_metadata()
+                .is_some()
+            {
+                return false;
+            }
+            let Some(member) =
+                self.get_class_member_with_defining_class(&accessed_class, &expect.attr.id)
+            else {
+                return false;
+            };
+            !member.defining_class.module_path().is_interface()
+                && !owners.iter().any(|owner| {
+                    member.defining_class == *owner
+                        || self
+                            .get_mro_for_class(owner)
+                            .ancestors_no_object()
+                            .iter()
+                            .any(|ancestor| ancestor.class_object() == &member.defining_class)
+                })
+        });
+        if inaccessible && self.has_static_attr(value_type, &expect.attr.id) {
+            self.error(
+                errors,
+                expect.attr.range(),
+                ErrorKind::ProtectedAccess,
+                format!(
+                    "Protected attribute `{}` cannot be accessed outside of its defining class or a subclass",
+                    expect.attr.id
+                ),
+            );
+        }
+    }
+
     fn check_private_attribute_access(
         &self,
         expect: &PrivateAttributeAccessCheck,
@@ -3407,28 +3472,32 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ) {
             return;
         }
-        if let Some(class_idx) = expect.class_idx {
-            let class_binding = self.get_idx(class_idx);
-            let Some(owner) = class_binding.0.as_ref() else {
-                return;
-            };
-            if self
+        if Ast::is_protected_attr(&expect.attr.id) {
+            self.check_protected_attribute_access(expect, &value_type, errors);
+            return;
+        }
+        let owner = expect
+            .class_idxs
+            .first()
+            .and_then(|class_idx| self.get_idx(*class_idx).0.clone());
+        if !expect.class_idxs.is_empty() && owner.is_none() {
+            return;
+        }
+        if let Some(owner) = owner.as_ref()
+            && self
                 .get_class_fields(owner)
                 .is_some_and(|f| f.contains(&expect.attr.id))
-                && self.is_subset_eq(
-                    &value_type,
-                    &self.union(
-                        self.heap.mk_class_def(owner.dupe()),
-                        self.instantiate(owner),
-                    ),
-                )
-            {
-                return; // Valid private attribute access
-            }
+            && self.is_subset_eq(
+                &value_type,
+                &self.union(
+                    self.heap.mk_class_def(owner.dupe()),
+                    self.instantiate(owner),
+                ),
+            )
+        {
+            return;
         }
-        // No defining class to restrict access to — the attribute is only
-        // reachable via dynamic fallback (__getattr__/__getattribute__), so
-        // name mangling is irrelevant.
+        // Dynamic fallback does not establish a class declaration to restrict access to.
         if !self.has_static_attr(&value_type, &expect.attr.id) {
             return;
         }

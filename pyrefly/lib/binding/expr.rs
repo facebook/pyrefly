@@ -783,8 +783,8 @@ impl<'a> BindingsBuilder<'a> {
 
         match x {
             Expr::Attribute(attr) => {
-                self.check_private_attribute_usage(attr);
                 self.ensure_expr(&mut attr.value, usage);
+                self.check_private_attribute_usage(attr);
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 // Some subscripts are (or contain) type expressions even when they appear in a
@@ -1266,17 +1266,26 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn check_private_attribute_usage(&mut self, attr: &ExprAttribute) {
-        if !Ast::is_mangled_attr(&attr.attr.id) {
+        if !Ast::is_mangled_attr(&attr.attr.id) && !Ast::is_protected_attr(&attr.attr.id) {
             return;
         }
+        let class_idxs = if Ast::is_protected_attr(&attr.attr.id) {
+            self.scopes.enclosing_class_keys()
+        } else {
+            self.scopes
+                .current_class_key()
+                .or_else(|| self.scopes.current_method_context())
+                .into_iter()
+                .collect()
+        };
         let expect = PrivateAttributeAccessCheck {
             value: (*attr.value).clone(),
             attr: attr.attr.clone(),
-            class_idx: self.scopes.current_method_context(),
+            class_idxs,
         };
         self.insert_binding(
             KeyExpect::PrivateAttributeAccess(attr.attr.range()),
-            BindingExpect::PrivateAttributeAccess(expect),
+            BindingExpect::PrivateAttributeAccess(Box::new(expect)),
         );
     }
 

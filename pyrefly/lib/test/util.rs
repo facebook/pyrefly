@@ -307,6 +307,7 @@ pub struct TestEnv {
     unknown_attribute_access_error: bool,
     implicit_reexport_error: bool,
     potential_bad_keyword_argument_error: bool,
+    protected_access_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     replace_imports_with_any: Vec<String>,
@@ -382,6 +383,7 @@ impl TestEnv {
             unknown_attribute_access_error: false,
             implicit_reexport_error: false,
             potential_bad_keyword_argument_error: false,
+            protected_access_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             replace_imports_with_any: Vec::new(),
@@ -739,6 +741,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_protected_access_error(mut self) -> Self {
+        self.protected_access_error = true;
+        self
+    }
+
     pub fn enable_potential_bad_keyword_argument_error(mut self) -> Self {
         self.potential_bad_keyword_argument_error = true;
         self
@@ -874,6 +881,9 @@ impl TestEnv {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
         let errors = config.root.errors.as_mut().unwrap();
+        if self.protected_access_error {
+            errors.set_error_severity(ErrorKind::ProtectedAccess, Severity::Error);
+        }
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
         }
