@@ -3691,6 +3691,13 @@ impl<'a> Transaction<'a> {
         // Actions such as missing-`@override` and context-manager annotations
         // carry multiple edits that must apply together.
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
+        if let Some(actions) = self.implement_abstract_members_code_actions(handle, range) {
+            multi_actions.extend(
+                actions
+                    .into_iter()
+                    .map(|action| (action.title, action.edits)),
+            );
+        }
         // Deduplicates the actions pushed onto `other_actions`. The same fix can
         // be generated more than once -- e.g. several errors on one line all
         // produce an identical "add pyrefly ignore" action, or one unused binding
@@ -4193,6 +4200,16 @@ impl<'a> Transaction<'a> {
         selection: TextRange,
     ) -> Option<Vec<LocalRefactorCodeAction>> {
         quick_fixes::extract_superclass::extract_superclass_code_actions(self, handle, selection)
+    }
+
+    pub fn implement_abstract_members_code_actions(
+        &self,
+        handle: &Handle,
+        selection: TextRange,
+    ) -> Option<Vec<LocalRefactorCodeAction>> {
+        quick_fixes::implement_abstract_members::implement_abstract_members_code_actions(
+            self, handle, selection,
+        )
     }
 
     pub fn pull_members_up_code_actions(

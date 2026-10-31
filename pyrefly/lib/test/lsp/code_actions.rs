@@ -654,6 +654,49 @@ fn compute_extract_superclass_actions(
     })
 }
 
+fn compute_implement_abstract_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range_with(code, "# ACTION-START", "# ACTION-END");
+    let actions = transaction
+        .implement_abstract_members_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn compute_implement_abstract_actions_allow_errors(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Everything, false);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = find_marked_range_with(code, "# ACTION-START", "# ACTION-END");
+    let actions = transaction
+        .implement_abstract_members_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
 #[test]
 fn basic_test() {
     let report = get_batched_lsp_operations_report_allow_error(
@@ -4368,25 +4411,29 @@ class Sub(Super):
 #[test]
 fn push_member_down_basic() {
     let code = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     def foo(self):
         pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     pass
 "#;
     let (module_info, actions, titles) = compute_push_down_actions(code);
     assert_eq!(vec!["Push `foo` down to `Child`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
     let expected = r#"
+from abc import ABC
+
 class Base:
     # MOVE-START
     pass
     # MOVE-END
 
-class Child(Base):
+class Child(Base, ABC):
     def foo(self):
         pass
 "#;
@@ -4978,6 +5025,321 @@ x = foo()
     assert_eq!(expected_a.trim(), updated_a.trim());
     assert_eq!(expected_b.trim(), updated_b.trim());
     assert_eq!(expected_c.trim(), updated_c.trim());
+}
+
+#[test]
+fn implement_abstract_members_preserves_class_body() {
+    for (body, expected) in [
+        ("pass", ""),
+        ("pass;", ""),
+        ("\"\"\"Child doc.\"\"\"", "    \"\"\"Child doc.\"\"\"\n"),
+        (
+            "\n    \"\"\"Child doc.\"\"\"",
+            "    \"\"\"Child doc.\"\"\"\n",
+        ),
+        ("pass; value = 1", "    pass; value = 1\n"),
+        (
+            "\n    \"\"\"Child doc.\"\"\"; pass",
+            "    \"\"\"Child doc.\"\"\"; pass\n",
+        ),
+    ] {
+        let separator = if body.starts_with('\n') { "" } else { " " };
+        let code = format!(
+            "from abc import ABC, abstractmethod\nclass Base(ABC):\n    @abstractmethod\n    def foo(self) -> int: ...\n# ACTION-START\nclass Child(Base):{separator}{body}"
+        );
+        let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Everything, false);
+        let handle = &handles["main"];
+        let transaction = state.transaction();
+        let info = transaction.get_module_info(handle).unwrap();
+        let start = TextSize::try_from(code.find("class Child").unwrap()).unwrap();
+        let actions = transaction
+            .implement_abstract_members_code_actions(handle, TextRange::empty(start))
+            .unwrap();
+        let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+        assert!(after.contains(&format!(
+            "class Child(Base):\n{expected}    def foo(self) -> int:\n        raise NotImplementedError\n"
+        )), "{after}");
+        mk_multi_file_state_assert_no_errors(&[("main", &after)], Require::Everything);
+    }
+}
+
+#[test]
+fn implement_abstract_members_indentation_and_decorators() {
+    let code = r#"
+from abc import ABC, abstractmethod
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def create(cls, /, value: int = 0, *, flag: bool = False) -> int: ...
+    @staticmethod
+    @abstractmethod
+    def parse(value: str, scale: float = 1.5) -> int: ...
+class Outer:
+    # ACTION-START
+    class Child(Base):
+        @staticmethod
+        def existing() -> None: pass
+    # ACTION-END
+"#
+    .replace("    ", "\t")
+    .replace('\n', "\r\n");
+    let (info, actions, _) = compute_implement_abstract_actions_allow_errors(&code);
+    let after = apply_refactor_edits_for_module(&info, &actions[0]);
+    let normalized = after.replace("\r\n", "\n");
+    for expected in [
+        "\t\t@classmethod\n\t\tdef create(cls, /, value: int = 0, *, flag: bool = False) -> int:",
+        "\t\t@staticmethod\n\t\tdef parse(value: str, scale: float = 1.5) -> int:",
+        "\t\t@staticmethod\n\t\tdef existing() -> None: pass",
+    ] {
+        assert!(normalized.contains(expected), "{after}");
+    }
+    mk_multi_file_state_assert_no_errors(&[("main", &after)], Require::Everything);
+}
+
+#[test]
+fn implement_abstract_members_preserves_contracts_and_imports() {
+    let base = r#"
+from abc import ABC, abstractmethod
+from typing import Callable, Protocol, Self, overload
+
+class Payload: pass
+
+class Callback(Protocol):
+    def __call__(self, value: int, *, flag: bool) -> str: ...
+
+class Base[T](ABC):
+    @abstractmethod
+    def callback(self, cb: Callable[[int], str], *args: int, flag: bool) -> Self: ...
+
+    @abstractmethod
+    def callback_protocol(self, cb: Callback) -> None: ...
+
+    @abstractmethod
+    def unknown(self, value = object()): ...
+
+    @abstractmethod
+    async def fetch(self, value: Payload) -> T: ...
+
+    @abstractmethod
+    def identity[U: Payload](self, value: U) -> U: ...
+
+    @overload
+    @abstractmethod
+    def convert(self, value: int) -> str: ...
+    @overload
+    @abstractmethod
+    def convert(self, value: str) -> int: ...
+
+    @property
+    @abstractmethod
+    def value(self) -> int: ...
+    @value.setter
+    @abstractmethod
+    def value(self, value: int) -> None: ...
+"#;
+    let code = "from __future__ import annotations\nfrom base import Base\n# ACTION-START\nclass Child(Base[int]):\n    pass\n# ACTION-END\n";
+    let (handles, state) = mk_multi_file_state(
+        &[("base", base), ("main", code)],
+        Require::Everything,
+        false,
+    );
+    let transaction = state.transaction();
+    let handle = &handles["main"];
+    let info = transaction.get_module_info(handle).unwrap();
+    let actions = transaction
+        .implement_abstract_members_code_actions(
+            handle,
+            find_marked_range_with(code, "# ACTION-START", "# ACTION-END"),
+        )
+        .unwrap();
+    let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+    for expected in [
+        "cb: Callable[[int], str], *args: int, flag: bool) -> Self",
+        "def callback_protocol(self, cb: Callback) -> None:",
+        "async def fetch(self, value: Payload) -> int:",
+        "def identity[U: Payload](self, value: U) -> U:",
+        "def convert(self, value: int) -> str:",
+        "def convert(self, value: str) -> int:",
+        "@value.setter\n    def value(self, value: int) -> None:",
+        "from base import Payload",
+    ] {
+        assert!(after.contains(expected), "Missing {expected:?}:\n{after}");
+    }
+    assert!(!after.contains("Unknown"), "{after}");
+    assert!(!after.contains("Self@"), "{after}");
+    mk_multi_file_state_assert_no_errors(&[("base", base), ("main", &after)], Require::Everything);
+}
+
+#[test]
+fn implement_abstract_members_resolves_import_aliases_and_collisions() {
+    let base = "from abc import ABC, abstractmethod\nclass Payload: pass\nclass Base(ABC):\n    @abstractmethod\n    def foo(self, value: Payload) -> Payload: ...\n";
+    for (imports, annotation) in [
+        ("from base import Payload as P\n", "P"),
+        ("import base as b\n", "b.Payload"),
+        ("class Payload: pass\n", "base.Payload"),
+    ] {
+        let code = format!(
+            "from base import Base\n{imports}# ACTION-START\nclass Child(Base):\n    pass\n# ACTION-END\n"
+        );
+        let (handles, state) = mk_multi_file_state(
+            &[("base", base), ("main", &code)],
+            Require::Everything,
+            false,
+        );
+        let transaction = state.transaction();
+        let handle = &handles["main"];
+        let info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .implement_abstract_members_code_actions(
+                handle,
+                find_marked_range_with(&code, "# ACTION-START", "# ACTION-END"),
+            )
+            .unwrap();
+        let after = apply_refactor_edits_for_module(&info, &actions[0].edits);
+        assert!(
+            after.contains(&format!(
+                "def foo(self, value: {annotation}) -> {annotation}:"
+            )),
+            "{after}"
+        );
+        mk_multi_file_state_assert_no_errors(
+            &[("base", base), ("main", &after)],
+            Require::Everything,
+        );
+    }
+}
+
+#[test]
+fn implement_abstract_members_preserves_protocol_attributes() {
+    let code = r#"
+from typing import ClassVar, Protocol
+class Proto(Protocol):
+    count: ClassVar[int]
+    name: str
+# ACTION-START
+class Child(Proto):
+    pass
+# ACTION-END
+"#;
+    let (info, actions, _) = compute_implement_abstract_actions_allow_errors(code);
+    let after = apply_refactor_edits_for_module(&info, &actions[0]);
+    assert!(
+        after.contains("class Child(Proto):\n    count: ClassVar[int]\n"),
+        "{after}"
+    );
+    mk_multi_file_state_assert_no_errors(&[("main", &after)], Require::Everything);
+}
+
+#[test]
+fn implement_abstract_members_inserts_stubs() {
+    let code = r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    @abstractmethod
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Child(Base):
+    # ACTION-START
+    pass
+    # ACTION-END
+"#;
+    let (module_info, actions, titles) = compute_implement_abstract_actions(code);
+    assert_eq!(vec!["Implement abstract members"], titles);
+    let edits = actions.first().expect("missing abstract member edits");
+    let after = apply_refactor_edits_for_module(&module_info, edits);
+    assert_eq!(
+        r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    @abstractmethod
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Child(Base):
+    # ACTION-START
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        raise NotImplementedError
+
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        raise NotImplementedError
+    # ACTION-END
+"#,
+        after
+    );
+}
+
+#[test]
+fn implement_protocol_members_inserts_stubs() {
+    let code = r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Impl(Proto):
+    # ACTION-START
+    pass
+    # ACTION-END
+"#;
+    let (module_info, actions, titles) = compute_implement_abstract_actions_allow_errors(code);
+    assert_eq!(vec!["Implement abstract members"], titles);
+    let edits = actions.first().expect("missing protocol member edits");
+    let after = apply_refactor_edits_for_module(&module_info, edits);
+    assert_eq!(
+        r#"
+from typing import Protocol
+
+class Proto(Protocol):
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        ...
+
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        ...
+
+class Impl(Proto):
+    # ACTION-START
+    @property
+    def bar(self) -> int:
+        """Bar doc."""
+        raise NotImplementedError
+
+    def foo(self, x: int) -> str:
+        """Foo doc."""
+        raise NotImplementedError
+    # ACTION-END
+"#,
+        after
+    );
 }
 
 #[test]
