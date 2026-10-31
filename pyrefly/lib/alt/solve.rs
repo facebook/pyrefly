@@ -496,20 +496,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Solve a `BindingLegacyTypeParam`, producing a `LegacyTypeParameterLookup` that tells the
-    /// caller whether the name is a type parameter and, if so, which `Quantified` to use.
-    ///
-    /// The `scope_anchor` is the range of the `KeyLegacyTypeParam` key itself — the first
-    /// occurrence of the TypeVar name in this scope. It is unique per (scope, TypeVar) pair:
-    /// two functions that both use an imported `T` will have different first-occurrence ranges,
-    /// so their `Quantified`s will have different identities even though they share the same
-    /// module-level `TypeVar` declaration.
-    pub fn solve_legacy_tparam(
-        &self,
-        binding: &BindingLegacyTypeParam,
-        scope_anchor: TextRange,
-    ) -> LegacyTypeParameterLookup {
-        let maybe_parameter = match binding {
+    /// Resolve the original value before a possible legacy type parameter is quantified.
+    pub(crate) fn legacy_tparam_value(&self, binding: &BindingLegacyTypeParam) -> TypeInfo {
+        match binding {
             BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k).clone(),
             BindingLegacyTypeParam::ModuleKeyed(module) => {
                 // Errors in attribute lookup are reported elsewhere.
@@ -526,7 +515,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         )
                     })
             }
-        };
+        }
+    }
+
+    /// Solve a `BindingLegacyTypeParam`, producing a `LegacyTypeParameterLookup` that tells the
+    /// caller whether the name is a type parameter and, if so, which `Quantified` to use.
+    ///
+    /// The `scope_anchor` is the range of the `KeyLegacyTypeParam` key itself — the first
+    /// occurrence of the TypeVar name in this scope. It is unique per (scope, TypeVar) pair:
+    /// two functions that both use an imported `T` will have different first-occurrence ranges,
+    /// so their `Quantified`s will have different identities even though they share the same
+    /// module-level `TypeVar` declaration.
+    pub fn solve_legacy_tparam(
+        &self,
+        binding: &BindingLegacyTypeParam,
+        scope_anchor: TextRange,
+    ) -> LegacyTypeParameterLookup {
+        let maybe_parameter = self.legacy_tparam_value(binding);
         // Use the scope_anchor (the KeyLegacyTypeParam's own range, i.e. the first occurrence
         // of this TypeVar name in the enclosing function/class/alias scope) as the identity
         // anchor. This gives each (scope, TypeVar) pair a distinct Quantified even when multiple

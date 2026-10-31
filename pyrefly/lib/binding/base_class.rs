@@ -95,6 +95,8 @@ pub enum BaseClass {
     TypedDict(TextRange),
     Generic(BaseClassGeneric),
     BaseClassExpr(BaseClassExpr),
+    /// A call expression used as a base of an ordinary class statement.
+    Call(Expr),
     InvalidExpr(Expr),
     /// A namedtuple base class.
     /// The bool indicates whether fields were dynamically generated
@@ -131,6 +133,7 @@ impl Ranged for BaseClass {
             BaseClass::TypedDict(range) => *range,
             BaseClass::Generic(x) => x.range(),
             BaseClass::BaseClassExpr(base_expr) => base_expr.range(),
+            BaseClass::Call(expr) => expr.range(),
             BaseClass::InvalidExpr(expr) => expr.range(),
             BaseClass::NamedTuple(range, _) => *range,
             BaseClass::SynthesizedBase(_, range) => *range,
