@@ -77,9 +77,8 @@ pub struct Context<'a, Lookup> {
 }
 
 /// AST and lexer tokens produced by the same parser invocation.
-/// Tokens are only retained when the require level is `Everything`
-/// (i.e. open files in the LSP), since they are only needed for
-/// semantic token highlighting.
+/// Tokens are retained at require level `Everything` (i.e. open files in the
+/// LSP) for features such as semantic token highlighting and signature help.
 #[derive(Debug, Dupe, Clone)]
 pub struct ParsedModule {
     module: Arc<ModModule>,

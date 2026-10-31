@@ -216,6 +216,8 @@ impl Transaction<'_> {
                 if gap_start >= position {
                     break;
                 }
+                // Gap endpoints are AST boundaries, so they cannot split lexer tokens.
+                // The cursor can be inside a token; use it only as an iterator cutoff.
                 *index += tokens
                     .in_range(TextRange::new(gap_start, range.start()))
                     .iter()
