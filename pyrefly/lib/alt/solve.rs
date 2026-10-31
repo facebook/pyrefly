@@ -6520,7 +6520,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
     }
 
-    fn binding_to_type_info(&self, binding: &Binding, errors: &ErrorCollector) -> TypeInfo {
+    pub(crate) fn binding_to_type_info(
+        &self,
+        binding: &Binding,
+        errors: &ErrorCollector,
+    ) -> TypeInfo {
         match binding {
             Binding::Forward(k) | Binding::PatternCapture(k) => self.get_idx(*k).clone(),
             Binding::PromoteForward(k) => self.resolve_promote_forward(*k),
