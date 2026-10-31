@@ -122,6 +122,92 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn nested_commas_do_not_affect_active_parameter_test() {
+    let code = r#"
+def foo(a: str, b: int, c: bool) -> None: ...
+def max(x: str, y: str) -> str: ...
+
+foo(max("a", "b"), )
+#                  ^
+foo(("a", "b"), )
+#              ^
+foo("a,b", )
+#         ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+
+    for position in extract_cursors_for_test(code) {
+        let signature = state
+            .transaction()
+            .get_signature_help_at(handle, position)
+            .expect("signature help available");
+        assert_eq!(signature.active_parameter, Some(ActiveParameter::Int(1)));
+        assert_eq!(
+            signature.signatures[0].active_parameter,
+            Some(ActiveParameter::Int(1))
+        );
+    }
+}
+
+#[test]
+fn argument_separator_gaps_test() {
+    for line_ending in ["\n", "\r\n", "\r"] {
+        for (name, call, expected) in [
+            ("lambda parameters", "foo(lambda x, y: x, |)", 1),
+            ("keyword lambda parameters", "foo(a=lambda x, y: x, |)", 1),
+            ("same-quote f-string", r#"foo(f"{")"}", |)"#, 1),
+            ("unterminated string", "foo(\"unfinished\n    , |)", 1),
+            (
+                "escaped newline in string",
+                "foo(\"continued\\\n    , value\", |)",
+                1,
+            ),
+            (
+                "escaped newline in unterminated string",
+                "foo(\"unfinished\\\n    , |)",
+                0,
+            ),
+            (
+                "comment before separator",
+                "foo(\"a\" # comment, )\n    , |)",
+                1,
+            ),
+            ("cursor inside comment", "foo(\"a\", # co|mment, )\n)", 1),
+            (
+                "keyword before starred argument",
+                "foo(a=\"a,b\", *(\"x\", \"y\"), |)",
+                2,
+            ),
+        ] {
+            let code = format!(
+                "def foo(a: object, b: object = None, c: object = None) -> None: ...\n{call}\n"
+            )
+            .replace('\n', line_ending);
+            let position = TextSize::try_from(code.find('|').expect("cursor marker present"))
+                .expect("test source fits in TextSize");
+            let code = code.replace('|', "");
+            let (handles, state) = mk_multi_file_state(&[("main", &code)], Require::Exports, false);
+            let signature = state
+                .transaction()
+                .get_signature_help_at(handles.get("main").unwrap(), position)
+                .unwrap_or_else(|| panic!("signature help available for {name}, {line_ending:?}"));
+            assert_eq!(
+                signature.active_parameter,
+                Some(ActiveParameter::Int(expected)),
+                "{name}, line ending {line_ending:?}"
+            );
+            assert_eq!(
+                signature.signatures[0].active_parameter,
+                Some(ActiveParameter::Int(expected)),
+                "{name}, line ending {line_ending:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn positional_arguments_test() {
     let code = r#"
 def f(x: int, y: int, z: int) -> None: ...

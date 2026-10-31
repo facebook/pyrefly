@@ -141,7 +141,8 @@ impl SerializedError {
                 ErrorQuickFix::RemoveUnusedSuppression(edit) => Some(edit),
                 ErrorQuickFix::ReplaceWithEnumMember { .. }
                 | ErrorQuickFix::AssertNotNone
-                | ErrorQuickFix::ImportModule { .. } => None,
+                | ErrorQuickFix::ImportModule { .. }
+                | ErrorQuickFix::ReplaceDeprecatedContextManagerReturn(_) => None,
             });
             let line = removal_edit
                 .map(|edit| {

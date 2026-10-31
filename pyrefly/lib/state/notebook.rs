@@ -21,22 +21,43 @@ pub struct LspNotebook {
     // Notebook cells have Urls of unspecified format
     cell_url_to_index: SmallMap<Uri, usize>,
     cell_index_to_url: Vec<Uri>,
+    /// All-cell indices of code cells, in notebook order.
+    code_cell_indices: Vec<usize>,
+    cell_versions: SmallMap<Uri, i32>,
 }
 
 impl LspNotebook {
-    pub fn new(ruff_notebook: Notebook, notebook_document: NotebookDocument) -> Self {
+    pub fn new(
+        ruff_notebook: Notebook,
+        notebook_document: NotebookDocument,
+        mut cell_versions: SmallMap<Uri, i32>,
+    ) -> Self {
         let mut cell_url_to_index = SmallMap::new();
         let mut cell_index_to_url = Vec::new();
         for (idx, cell) in notebook_document.cells.iter().enumerate() {
             cell_url_to_index.insert(cell.document.clone(), idx);
             cell_index_to_url.push(cell.document.clone());
         }
+        let code_cell_indices = ruff_notebook
+            .cells()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cell)| cell.is_code_cell().then_some(index))
+            .collect();
+        cell_versions.retain(|uri, _| cell_url_to_index.contains_key(uri));
         Self {
             ruff_notebook: Arc::new(ruff_notebook),
             notebook_document,
             cell_url_to_index,
             cell_index_to_url,
+            code_cell_indices,
+            cell_versions,
         }
+    }
+
+    /// Cell text versions are independent of the notebook version.
+    pub fn cell_versions(&self) -> &SmallMap<Uri, i32> {
+        &self.cell_versions
     }
 
     pub fn notebook_document(&self) -> &NotebookDocument {
@@ -53,19 +74,13 @@ impl LspNotebook {
     /// two filters agree for typical Python notebooks.
     pub fn get_code_cell_index(&self, cell_url: &Uri) -> Option<usize> {
         let all_cells_idx = *self.cell_url_to_index.get(cell_url)?;
-        let cells = self.ruff_notebook.cells();
-        if !cells.get(all_cells_idx)?.is_code_cell() {
-            return None;
-        }
-        let code_cell_index = cells[..all_cells_idx]
-            .iter()
-            .filter(|c| c.is_code_cell())
-            .count();
-        Some(code_cell_index)
+        self.code_cell_indices.binary_search(&all_cells_idx).ok()
     }
 
+    /// Returns the URI at a code-cell index, excluding markdown cells.
     pub fn get_code_cell_url(&self, cell_index: usize) -> Option<&Uri> {
-        self.cell_index_to_url.get(cell_index)
+        self.cell_index_to_url
+            .get(*self.code_cell_indices.get(cell_index)?)
     }
 
     pub fn code_cell_urls(&self) -> &Vec<Uri> {
@@ -140,7 +155,7 @@ mod tests {
             .clone()
             .to_ruff_notebook(&cell_content)
             .unwrap();
-        let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_doc);
+        let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_doc, SmallMap::new());
 
         // First code cell (all-cells index 0) → code-cell index 0
         assert_eq!(lsp_notebook.get_code_cell_index(&cell0_url), Some(0));
@@ -148,5 +163,19 @@ mod tests {
         assert_eq!(lsp_notebook.get_code_cell_index(&cell1_url), None);
         // Second code cell (all-cells index 2) → code-cell index 1
         assert_eq!(lsp_notebook.get_code_cell_index(&cell2_url), Some(1));
+
+        assert_eq!(lsp_notebook.get_code_cell_url(0), Some(&cell0_url));
+        assert_eq!(lsp_notebook.get_code_cell_url(1), Some(&cell2_url));
+        assert_eq!(lsp_notebook.get_code_cell_url(2), None);
+        assert_eq!(lsp_notebook.get_code_cell_url(3), None);
+        assert_eq!(
+            lsp_notebook.code_cell_urls(),
+            &vec![cell0_url.clone(), cell1_url.clone(), cell2_url.clone()]
+        );
+        assert_eq!(lsp_notebook.get_cell_contents(&cell1_url), None);
+        assert_eq!(
+            lsp_notebook.get_cell_contents(&cell2_url).as_deref(),
+            Some("y = 2")
+        );
     }
 }

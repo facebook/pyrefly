@@ -7,6 +7,7 @@
 
 use std::cmp::Ordering;
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::iter;
 use std::path::PathBuf;
@@ -3441,6 +3442,46 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    /// Finds ancestor declarations directly from class fields and the MRO.
+    /// Each range belongs to the module snapshot stored on its declaring class.
+    pub fn parent_declarations(
+        &self,
+        handle: &Handle,
+        range: TextRange,
+    ) -> Vec<TextRangeWithModule> {
+        let Some(answers) = self.get_answers(handle) else {
+            return Vec::new();
+        };
+        let Some(class_key) = answers.bindings().enclosing_class(range) else {
+            return Vec::new();
+        };
+        self.ad_hoc_solve(handle, "parent_declarations", |solver| {
+            let class = solver.get_idx(class_key).0.as_ref()?;
+            let fields = solver.get_class_fields(class)?;
+            let name = fields
+                .names()
+                .find(|name| fields.field_decl_range(name) == Some(range))?;
+            if Ast::is_mangled_attr(name) {
+                return Some(Vec::new());
+            }
+            let mut seen = HashSet::new();
+            Some(
+                solver
+                    .get_mro_for_class(class)
+                    .ancestors(solver.stdlib)
+                    .filter_map(|ancestor| {
+                        let class = ancestor.class_object();
+                        let range = solver.get_class_fields(class)?.field_decl_range(name)?;
+                        seen.insert((class.module().path().dupe(), range))
+                            .then(|| TextRangeWithModule::new(class.module().dupe(), range))
+                    })
+                    .collect(),
+            )
+        })
+        .flatten()
+        .unwrap_or_default()
+    }
+
     pub fn goto_declaration(
         &self,
         handle: &Handle,
@@ -3457,7 +3498,6 @@ impl<'a> Transaction<'a> {
                 ..Default::default()
             },
         )?;
-
         Ok(definitions
             .into_vec()
             .into_map(|item| TextRangeWithModule::new(item.module, item.definition_range)))
@@ -3649,8 +3689,8 @@ impl<'a> Transaction<'a> {
         let mut import_actions = Vec::new();
         let mut generate_actions = Vec::new();
         let mut other_actions = Vec::new();
-        // Actions that carry more than one edit (e.g. the missing-`@override` fix,
-        // which inserts both the decorator and an import).
+        // Actions such as missing-`@override` and context-manager annotations
+        // carry multiple edits that must apply together.
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
         // Deduplicates the actions pushed onto `other_actions`. The same fix can
         // be generated more than once -- e.g. several errors on one line all
@@ -3724,6 +3764,18 @@ impl<'a> Transaction<'a> {
                 if other_action_keys.insert(key) {
                     other_actions.push(action);
                 }
+            }
+            if error_range.contains_range(range)
+                && let Some(action) =
+                    quick_fixes::deprecated_contextmanager::replace_return_code_action(
+                        self,
+                        handle,
+                        &module_info,
+                        &ast,
+                        &error,
+                    )
+            {
+                multi_actions.push(action);
             }
             if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::pyrefly_ignore::add_pyrefly_ignore_code_action(
@@ -3893,9 +3945,7 @@ impl<'a> Transaction<'a> {
         // this will be the public/non-deprecated version)
         import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
 
-        // Every quick-fix producer except the missing-`@override` fix yields a single
-        // edit; wrap those in a one-element edit list so they share the multi-edit shape
-        // that `multi_actions` and the LSP layer expect.
+        // Wrap single-edit actions in the same shape as the multi-edit producers.
         fn wrap_single(
             (title, module, range, insert_text): (String, Module, TextRange, String),
         ) -> (String, Vec<(Module, TextRange, String)>) {
@@ -3925,9 +3975,8 @@ impl<'a> Transaction<'a> {
         (!actions.is_empty()).then_some(actions)
     }
 
-    /// Builds an edit inserting `from typing import override` (preferring `typing`
-    /// over `typing_extensions`) at the top of the file. Returns `None` when no
-    /// module in scope exports `override`.
+    /// Imports `override`, preferring `typing` over `typing_extensions`.
+    /// Returns `None` when the name cannot be found.
     fn override_import_edit(
         &self,
         handle: &Handle,
@@ -5499,11 +5548,12 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 sys_info,
             );
             let mut rdeps = transaction.transitive_rdeps(handle_of_filesystem_counterpart.dupe());
-            rdeps.insert(Handle::new(
+            // Imports can also resolve directly to an in-memory module.
+            rdeps.extend(transaction.transitive_rdeps(Handle::new(
                 definition.module.name(),
                 definition.module.path().dupe(),
                 sys_info,
-            ));
+            )));
             rdeps
         }
         _ => {
@@ -5726,7 +5776,101 @@ impl<'a> Transaction<'a> {
     }
 }
 
+/// Ancestor declarations and child implementations for one method.
+pub struct OverrideTargets {
+    pub parents: Vec<TextRangeWithModule>,
+    pub implementations: Vec<TextRangeWithModule>,
+}
+
 impl<'a> CancellableTransaction<'a> {
+    /// Batches override navigation for one document into one reverse-dependency search.
+    pub fn override_code_lens_targets(
+        &mut self,
+        handle: &Handle,
+        ranges: &[TextRange],
+    ) -> Result<Vec<OverrideTargets>, Cancelled> {
+        let cancellation = self.get_cancellation_handle();
+        let mut results = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            if cancellation.is_cancelled() {
+                return Err(Cancelled);
+            }
+            results.push(OverrideTargets {
+                parents: self.as_ref().parent_declarations(handle, *range),
+                implementations: Vec::new(),
+            });
+        }
+        if ranges.is_empty() {
+            return Ok(results);
+        }
+        let Some(module) = self.as_ref().get_module_info(handle) else {
+            return Ok(results);
+        };
+        let definition =
+            TextRangeWithModule::new(module.dupe(), TextRange::empty(TextSize::new(0)));
+        let candidates =
+            compute_transitive_rdeps_for_definition_impl(self, *handle.sys_info(), &definition)?;
+        let mut methods = HashMap::new();
+        let filesystem_handle = match module.path().details() {
+            ModulePathDetails::Memory(path) => Some(Handle::new(
+                module.name(),
+                ModulePath::filesystem((**path).clone()),
+                *handle.sys_info(),
+            )),
+            _ => None,
+        };
+        for (i, range) in ranges.iter().enumerate() {
+            methods.insert((module.path().dupe(), *range), i);
+            if let Some(filesystem_handle) = &filesystem_handle {
+                let patched = patch_definition_for_handle_impl(
+                    self,
+                    filesystem_handle,
+                    &TextRangeWithModule::new(module.dupe(), *range),
+                );
+                methods.insert((patched.module.path().dupe(), patched.range), i);
+            }
+        }
+        for candidate in candidates {
+            if cancellation.is_cancelled() {
+                return Err(Cancelled);
+            }
+            let Some(index) = self.solutions_index(&candidate) else {
+                continue;
+            };
+            let index = index.lock();
+            if index.parent_methods_map.is_empty() {
+                continue;
+            }
+            let Some(child_module) = self.as_ref().get_module_info(&candidate) else {
+                continue;
+            };
+            for (child_range, parents) in &index.parent_methods_map {
+                if cancellation.is_cancelled() {
+                    return Err(Cancelled);
+                }
+                for (parent_path, parent_range) in parents {
+                    if let Some(i) = methods.get(&(parent_path.dupe(), *parent_range)) {
+                        results[*i]
+                            .implementations
+                            .push(TextRangeWithModule::new(child_module.dupe(), *child_range));
+                    }
+                }
+            }
+        }
+        for targets in &mut results {
+            let children = &mut targets.implementations;
+            children.sort_by_key(|child| {
+                (
+                    child.module.path().dupe(),
+                    child.range.start(),
+                    child.range.end(),
+                )
+            });
+            children.dedup_by_key(|child| (child.module.path().dupe(), child.range));
+        }
+        Ok(results)
+    }
+
     /// Processes each transitive reverse dependency for a given definition location.
     ///
     /// This is a common pattern in workspace-wide references-related features. Candidates are

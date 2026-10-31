@@ -37,7 +37,8 @@ fn enum_member_replacement(error: &Error) -> Option<&str> {
         ErrorQuickFix::ReplaceWithEnumMember { replacement } => Some(replacement.as_str()),
         ErrorQuickFix::AssertNotNone
         | ErrorQuickFix::RemoveUnusedSuppression(_)
-        | ErrorQuickFix::ImportModule { .. } => None,
+        | ErrorQuickFix::ImportModule { .. }
+        | ErrorQuickFix::ReplaceDeprecatedContextManagerReturn(_) => None,
     })
 }
 

@@ -1116,6 +1116,36 @@ foo(x=1, y=2)
 }
 
 #[test]
+fn hover_shows_parameter_doc_for_numpydoc() {
+    let code = r#"
+def foo(x: int, y: str) -> None:
+    """Documented function.
+
+    Parameters
+    ----------
+    x : int
+        documentation for x
+    y : str
+        documentation for y
+    """
+    ...
+
+foo(x=1, y="hello")
+#   ^
+foo(x=1, y="hello")
+#        ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("**Parameter `x`**"),
+        "Expected parameter documentation for x, got: {report}"
+    );
+    assert!(report.contains("documentation for x"));
+    assert!(report.contains("**Parameter `y`**"));
+    assert!(report.contains("documentation for y"));
+}
+
+#[test]
 fn hover_shows_type_for_imported_keyword_argument() {
     let lib = r#"
 def foo(x: int, y: str) -> None: ...
