@@ -2880,6 +2880,113 @@ assert_type(choose(lambda x: (x or 0, x + 1 if x else 0)[1]), int)
 "#,
 );
 
+// Sequential boolean expressions form a DAG of narrowed reads of the same parameter.
+testcase!(
+    bug = "Recomputes shared narrowing predecessors exponentially",
+    test_overload_lambda_narrowing_chain,
+    r#"
+from typing import Callable, assert_type
+
+class D:
+    a: str | None
+    b: str
+
+def apply(f: Callable[[D], object]) -> None: ...
+
+def check(ds: list[D]) -> None:
+    apply(lambda d: (
+        d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "",
+        assert_type(d.b, str),
+    ))
+"#,
+);
+
+testcase!(
+    test_overload_lambda_nested_parameter_hints,
+    r#"
+from typing import Any, Callable, assert_type, overload
+
+@overload
+def choose(f: Callable[[int | None], int]) -> int: ...
+@overload
+def choose(f: Callable[[str | None], str]) -> str: ...
+def choose(f: Any) -> Any: ...
+
+def apply(f: Callable[[str | None], object]) -> None: ...
+
+assert_type(choose(lambda x: (
+    x or "",
+    apply(lambda y: (y or "", x or "", y.upper() if y else "")),
+    x.upper() if x else "",
+)[2]), str)
+assert_type(choose(lambda x: (
+    x or 0,
+    apply(lambda y: (y or "", x or 0, y.upper() if y else "")),
+    x + 1 if x else 0,
+)[2]), int)
+
+@overload
+def pair(f: Callable[[int | None, str | None], int]) -> int: ...
+@overload
+def pair(f: Callable[[str | None, int | None], str]) -> str: ...
+def pair(f: Any) -> Any: ...
+
+assert_type(pair(lambda x, y: (
+    x or "", y or 0, y + 1 if y else 0, x.upper() if x else "",
+)[3]), str)
+"#,
+);
+
+testcase!(
+    bug = "Nested predicate replay repeatedly invalidates shared narrows",
+    test_overload_lambda_replayed_predicate,
+    r#"
+from typing import Callable, assert_type
+
+def apply(f: Callable[[str | None], object]) -> None: ...
+
+apply(lambda x: (
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    assert_type(x, str | None),
+))
+"#,
+);
+
+testcase!(
+    test_overload_lambda_replayed_unsolved_default,
+    r#"
+from typing import Callable, assert_type
+
+def apply(f: Callable[[list[str] | None], object]) -> None: ...
+
+apply(lambda x: (
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    assert_type(x, list[str] | None),
+))
+"#,
+);
+
+testcase!(
+    test_overload_lambda_replayed_capture,
+    r#"
+from typing import Callable, assert_type
+
+def apply(f: Callable[[str | None], object]) -> None: ...
+
+apply(lambda x: (
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    assert_type(x, str | None),
+))
+"#,
+);
+
 testcase!(
     test_overload_intervening_statement_before_implementation,
     r#"
