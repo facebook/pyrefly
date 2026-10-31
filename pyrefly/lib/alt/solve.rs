@@ -790,6 +790,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ty: Some(self.expr_infer(&x.slice, errors)),
                 }
             }
+            // Check subscripts as type forms so that misplaced qualifiers are reported.
+            Expr::Subscript(_) => Annotation::new_type(
+                self.expr_infer_impl(x, None, errors, Some(TypeFormContext::ClassKeyword))
+                    .into_ty(),
+            ),
             _ => Annotation::new_type(self.expr_infer(x, errors)),
         }
     }
