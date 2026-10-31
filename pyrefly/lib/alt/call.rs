@@ -2389,9 +2389,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let first_use_types = self.active_first_use_types();
         roots.extend(first_use_types.iter());
         let lambda_snapshot = self.snapshot_lambda_param_types();
+        roots.extend(lambda_snapshot.iter().filter_map(|(_, ty)| ty.as_ref()));
         let mut accepted = Vec::new();
         let mut failures = Vec::new();
         for (index, member) in targets.iter().enumerate() {
+            let _lambda_context = self.enter_lambda_binding_context([]);
             let snapshot = self.solver().snapshot_reachable_vars(&roots);
             let arg_errors = self.error_collector();
             let attempt_errors = self.error_collector();

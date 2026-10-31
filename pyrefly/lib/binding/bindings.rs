@@ -12,8 +12,10 @@ use std::fmt::Display;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use dupe::Dupe;
+use fxhash::FxHashMap;
 use itertools::Itertools;
 use pyrefly_graph::index::Idx;
 use pyrefly_graph::index::Index;
@@ -245,6 +247,8 @@ pub struct Bindings {
     lambda_yield_keys: Vec<(TextRange, Box<[Idx<KeyYield>]>, Box<[Idx<KeyYieldFrom>]>)>,
     /// For each binding that owns lambdas, the parameters of those lambdas.
     owned_lambda_params: SmallMap<Idx<Key>, Vec<LambdaParamId>>,
+    /// Context-dependent parameter reads reached through forwards and narrowing joins.
+    lambda_parameter_derived: OnceLock<FxHashMap<Idx<Key>, LambdaParamId>>,
     /// Class body ranges paired with class indices. Used by the solver to
     /// recover the enclosing class for an expression that resolves to
     /// `typing.Self`, without needing a per-`Self`-use bind-time key.
@@ -458,6 +462,7 @@ impl Bindings {
             pytest_info: None,
             lambda_yield_keys: Vec::new(),
             owned_lambda_params: SmallMap::new(),
+            lambda_parameter_derived: OnceLock::new(),
             class_scopes: Vec::new(),
             class_field_definitions: SmallMap::new(),
             shape_declarations: ShapeDeclarations::default(),
@@ -565,6 +570,49 @@ impl Bindings {
         self.owned_lambda_params
             .get(&owner)
             .map_or(&[], |params| params.as_slice())
+    }
+
+    /// The ordinary lambda parameter reached by a binding's forward/narrowing source chain.
+    pub(crate) fn lambda_parameter_origin(&self, idx: Idx<Key>) -> Option<LambdaParamId> {
+        // Every ordinary LambdaParameter is registered with its enclosing expression's owner.
+        if self.owned_lambda_params.is_empty() {
+            return None;
+        }
+        self.lambda_parameter_derived
+            .get_or_init(|| {
+                let mut derived = FxHashMap::default();
+                let mut path = Vec::new();
+                for (idx, _) in self.table.types.1.iter() {
+                    let mut source = idx;
+                    let parameter = loop {
+                        if let Some(parameter) = derived.get(&source) {
+                            break *parameter;
+                        }
+                        // A source chain has one outgoing edge. Marking it before following
+                        // that edge makes a cycle terminate without an arbitrary depth cutoff.
+                        derived.insert(source, None);
+                        path.push(source);
+                        match self.table.types.1.get(source) {
+                            Some(Binding::LambdaParameter(id, _)) => break Some(*id),
+                            Some(
+                                Binding::Forward(parent)
+                                | Binding::Narrow(parent, ..)
+                                | Binding::Phi(JoinStyle::NarrowOf(parent), _),
+                            ) => source = *parent,
+                            _ => break None,
+                        }
+                    };
+                    for source in path.drain(..) {
+                        derived.insert(source, parameter);
+                    }
+                }
+                derived
+                    .into_iter()
+                    .filter_map(|(idx, parameter)| parameter.map(|parameter| (idx, parameter)))
+                    .collect()
+            })
+            .get(&idx)
+            .copied()
     }
 
     /// Returns the innermost class whose body range contains `range`, or
@@ -946,6 +994,7 @@ impl Bindings {
             pytest_info: builder.pytest_info,
             lambda_yield_keys: builder.lambda_yield_keys,
             owned_lambda_params: builder.owned_lambda_params,
+            lambda_parameter_derived: OnceLock::new(),
             class_scopes: builder.class_scopes,
             class_field_definitions: builder.class_field_definitions,
             shape_declarations: builder.shape_declarations.finish(),

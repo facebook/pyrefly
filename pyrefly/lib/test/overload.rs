@@ -2882,7 +2882,6 @@ assert_type(choose(lambda x: (x or 0, x + 1 if x else 0)[1]), int)
 
 // Sequential boolean expressions form a DAG of narrowed reads of the same parameter.
 testcase!(
-    bug = "Recomputes shared narrowing predecessors exponentially",
     test_overload_lambda_narrowing_chain,
     r#"
 from typing import Callable, assert_type
@@ -2895,8 +2894,14 @@ def apply(f: Callable[[D], object]) -> None: ...
 
 def check(ds: list[D]) -> None:
     apply(lambda d: (
-        d.a or "", d.a or "", d.a or "",
-        d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
+        d.a or "", d.a or "", d.a or "", d.a or "",
         assert_type(d.b, str),
     ))
 "#,
@@ -2939,7 +2944,6 @@ assert_type(pair(lambda x, y: (
 );
 
 testcase!(
-    bug = "Nested predicate replay repeatedly invalidates shared narrows",
     test_overload_lambda_replayed_predicate,
     r#"
 from typing import Callable, assert_type
@@ -2947,6 +2951,15 @@ from typing import Callable, assert_type
 def apply(f: Callable[[str | None], object]) -> None: ...
 
 apply(lambda x: (
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
+    x if x == (lambda y="": y)() else x,
     x if x == (lambda y="": y)() else x,
     x if x == (lambda y="": y)() else x,
     x if x == (lambda y="": y)() else x,
@@ -2966,6 +2979,15 @@ apply(lambda x: (
     x if x == (lambda y=[]: y)() else x,
     x if x == (lambda y=[]: y)() else x,
     x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
+    x if x == (lambda y=[]: y)() else x,
     assert_type(x, list[str] | None),
 ))
 "#,
@@ -2979,6 +3001,15 @@ from typing import Callable, assert_type
 def apply(f: Callable[[str | None], object]) -> None: ...
 
 apply(lambda x: (
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
+    x if x == (lambda: x)() else x,
     x if x == (lambda: x)() else x,
     x if x == (lambda: x)() else x,
     x if x == (lambda: x)() else x,
