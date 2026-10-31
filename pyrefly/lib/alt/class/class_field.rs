@@ -4243,6 +4243,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if want_field.defining_class.is_builtin("object") {
                 continue;
             }
+            if self.super_method_needs_impl_reason(&want_field).is_some() {
+                continue;
+            }
             self.error(
                 errors,
                 range,
