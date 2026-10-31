@@ -944,34 +944,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         );
     }
 
-    fn pydantic_name_initializer<'b>(&'b self, actual: &Expr) -> Option<&'b Expr> {
-        let Expr::Name(name) = actual else {
-            return None;
-        };
-        let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        let idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
-        let mut idx = idx;
-        let mut gas = Gas::new(100);
-        while !gas.stop() {
-            match self.bindings().get(idx) {
-                Binding::Forward(forward)
-                | Binding::PromoteForward(forward)
-                | Binding::ForwardToFirstUse(forward) => idx = *forward,
-                binding => return Self::pydantic_initializer_from_binding(binding),
-            }
-        }
-        None
-    }
-
-    fn pydantic_initializer_from_binding(binding: &Binding) -> Option<&Expr> {
-        match binding {
-            Binding::Expr(_, expr) => Some(expr),
-            Binding::NameAssign(assign) => Some(&assign.expr),
-            Binding::AnnotatedType(_, inner) => Self::pydantic_initializer_from_binding(inner),
-            _ => None,
-        }
-    }
-
     /// Walk only concrete dictionary and list input, with a fixed work limit.
     fn check_pydantic_model_validate_input(
         &self,
@@ -984,7 +956,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if gas.stop() {
             return;
         }
-        let actual = self.pydantic_name_initializer(actual).unwrap_or(actual);
+        // Named containers can be mutated or escape without rebinding their names.
         match expected {
             Type::Annotated(expected, _) => {
                 self.check_pydantic_model_validate_input(expected, actual, validation, gas, errors);

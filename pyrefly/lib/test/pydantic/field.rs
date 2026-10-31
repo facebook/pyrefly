@@ -13,7 +13,6 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
-    bug = "Mutable container initializers are not current validation input",
     test_model_validate_mutable_input_provenance,
     r#"
 from pydantic import BaseModel, Field
@@ -21,11 +20,11 @@ from pydantic import BaseModel, Field
 class Model(BaseModel):
     x: int = Field(ge=0)
 
-payload = {"x": -1}  # E: violates Pydantic `ge` constraint
+payload = {"x": -1}
 payload.update({"x": 1})
 Model.model_validate(payload)
 
-aliased = {"x": -1}  # E: violates Pydantic `ge` constraint
+aliased = {"x": -1}
 other = aliased
 other["x"] = 1
 Model.model_validate(aliased)
@@ -33,7 +32,7 @@ Model.model_validate(aliased)
 class Outer(BaseModel):
     items: list[Model]
 
-items = [{"x": -1}]  # E: violates Pydantic `ge` constraint
+items = [{"x": -1}]
 items.clear()
 Outer.model_validate({"items": items})
 
@@ -774,7 +773,8 @@ class Inventory(BaseModel):
 Inventory.model_validate({"items": [{"sku": "A-100", "quantity": 5}]})
 Inventory.model_validate({"items": [{"sku": "B-200", "quantity": -3}]})  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
 
-bad = {"items": [{"sku": "B-200", "quantity": -3}]}  # E: Argument value `Literal[-3]` violates Pydantic `ge` constraint `Literal[1]` for field `quantity`
+# Named mutable input is intentionally not inspected structurally.
+bad = {"items": [{"sku": "B-200", "quantity": -3}]}
 Inventory.model_validate(bad)
 "#,
 );
