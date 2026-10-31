@@ -91,6 +91,45 @@ Wrapper.model_validate({"child": {"x": 1}, "unchecked": -1})  # E: violates Pyda
 );
 
 pydantic_testcase!(
+    bug = "Wildcard and annotated validators invalidate raw input checks",
+    test_model_validate_additional_input_validators,
+    r#"
+from typing import Annotated
+from pydantic import BaseModel, BeforeValidator, Field, PlainValidator, field_validator
+
+def positive(value: int) -> int:
+    return abs(value)
+
+class Wildcard(BaseModel):
+    x: int = Field(ge=0)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def normalize(cls, value: int) -> int:
+        return abs(value)
+
+class WildcardChild(Wildcard):
+    pass
+
+Wildcard.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+WildcardChild.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+
+class Assigned(BaseModel):
+    x: Annotated[int, BeforeValidator(positive)] = Field(ge=0)
+
+class AnnotationOnly(BaseModel):
+    x: Annotated[int, Field(ge=0), BeforeValidator(positive)]
+
+class Plain(BaseModel):
+    x: Annotated[int, Field(ge=0), PlainValidator(positive)]
+
+Assigned.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+AnnotationOnly.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+Plain.model_validate({"x": -1})  # E: violates Pydantic `ge` constraint
+"#,
+);
+
+pydantic_testcase!(
     bug = "Unsupported validation aliases are confused with absent aliases",
     test_model_validate_unsupported_validation_aliases,
     r#"
