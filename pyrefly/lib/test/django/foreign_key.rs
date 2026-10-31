@@ -10,6 +10,36 @@ use crate::test::django::util::django_env;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+django_testcase!(
+    test_relation_assignment_contracts,
+    r#"
+from django.db import models
+
+class Author(models.Model): ...
+class Reader(models.Model): ...
+class SpecialAuthor(Author): ...
+
+class Book(models.Model):
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+    editor = models.ForeignKey(Author, on_delete=models.CASCADE, null=True)
+    owner = models.OneToOneField(Author, on_delete=models.CASCADE)
+    authors = models.ManyToManyField(Author)
+
+def update(book: Book) -> None:
+    book.author = Author()
+    book.author = SpecialAuthor()
+    book.editor = Author()
+    book.editor = None
+    book.author = Reader()  # E: not assignable
+    book.author = 123  # E: not assignable
+    book.author = None  # E: not assignable
+    book.editor = Reader()  # E: not assignable
+    book.owner = Reader()  # E: not assignable
+    book.owner = None  # E: not assignable
+    book.authors = [Author()]  # E: not assignable
+"#,
+);
+
 // https://github.com/facebook/pyrefly/issues/5157
 django_testcase!(
     test_foreign_key_keyword_target,
