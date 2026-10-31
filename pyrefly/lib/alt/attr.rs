@@ -3710,7 +3710,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Vec<AttrInfo> {
         let annotated_fields = self.django_annotated_fields(&base);
         let mut res = Vec::new();
-        if let Some(base) = self.as_attribute_base(base) {
+        if let Some(base) = self.as_attribute_base(base.clone()) {
             self.completions_inner(
                 base,
                 expected_attribute_name,
@@ -3718,6 +3718,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 include_object,
                 &mut res,
             );
+        }
+        if expected_attribute_name.is_none()
+            && let Some(getattr) = self.type_of_magic_dunder_attr(
+                &base,
+                &dunder::GETATTR,
+                TextRange::default(),
+                &self.error_swallower(),
+                None,
+                "completion_getattr",
+                false,
+            )
+        {
+            let param_index = usize::from(matches!(&getattr, Type::BoundMethod(_)));
+            for (callable, _) in getattr.toplevel_callable_signatures() {
+                let Some(param) = callable.get_positional_param(param_index) else {
+                    continue;
+                };
+                let members = match param {
+                    Type::Union(union) => union.members.as_slice(),
+                    _ => std::slice::from_ref(param),
+                };
+                for member in members {
+                    let Type::Literal(lit) = member else {
+                        continue;
+                    };
+                    let Lit::Str(value) = &lit.value else {
+                        continue;
+                    };
+                    let name = Name::new(value);
+                    if !res.iter().any(|info| info.name == name) {
+                        res.push(AttrInfo {
+                            name,
+                            ty: include_types.then(|| callable.ret.clone()),
+                            is_deprecated: false,
+                            definition: AttrDefinition::Synthetic,
+                            is_reexport: false,
+                            is_from_object: false,
+                        });
+                    }
+                }
+            }
         }
         for (name, ty) in annotated_fields {
             if expected_attribute_name.is_none_or(|expected| expected == &name)
