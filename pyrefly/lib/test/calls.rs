@@ -420,6 +420,37 @@ fn test_env_3_12() -> TestEnv {
 }
 
 testcase!(
+    test_deprecated_union_decorator,
+    r#"
+from collections.abc import Callable
+from typing import assert_type
+from warnings import deprecated
+
+def cache[**P, T](fn: Callable[P, T]) -> Callable[P, T] | Callable[[str], T]: ...
+
+@deprecated("Use another function")
+@cache
+def old_function(value: str) -> str: ...
+
+assert_type(old_function(""), str)  # E: `old_function` is deprecated
+_ = old_function  # E: `old_function` is deprecated
+
+@cache
+@deprecated("Use another function")
+def inner_deprecated(value: str) -> str: ...
+
+assert_type(inner_deprecated(""), str)  # E: `inner_deprecated` is deprecated
+_ = inner_deprecated  # E: `inner_deprecated` is deprecated
+
+@cache
+def current_function(value: str) -> str: ...
+
+assert_type(current_function(""), str)
+_ = current_function
+    "#,
+);
+
+testcase!(
     test_deprecated_call_3_12,
     test_env_3_12(),
     r#"
