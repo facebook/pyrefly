@@ -161,6 +161,78 @@ def f(x: X[int]):
 );
 
 testcase!(
+    test_generic_alias_union_with_enum_literal,
+    r#"
+from enum import Enum
+from typing import Literal, TypeAlias, TypeVar, assert_type
+
+T = TypeVar("T")
+
+class Unset(Enum):
+    _UNSET = "UNSET"
+
+UNSET: Literal[Unset._UNSET] = Unset._UNSET
+UnsetType: TypeAlias = Literal[Unset._UNSET]
+Missing: TypeAlias = UnsetType | T | None
+
+def takes(x: Missing[Literal["a", "b"]]) -> None: ...
+
+def or_unset[U](v: U | None) -> U | Literal[Unset._UNSET]:
+    return UNSET if v is None else v
+
+def f(s: Literal["a"] | None) -> None:
+    assert_type(or_unset(s), Literal["a"] | Literal[Unset._UNSET])
+    assert_type(s, Literal["a"] | None)
+    takes(or_unset(s))
+"#,
+);
+
+testcase!(
+    test_generic_alias_union_with_enum_literal_direct_argument,
+    r#"
+from enum import Enum
+from typing import Literal, TypeAlias, TypeVar
+
+T = TypeVar("T")
+
+class Unset(Enum):
+    _UNSET = "UNSET"
+
+UnsetType: TypeAlias = Literal[Unset._UNSET]
+Missing: TypeAlias = UnsetType | T | None
+
+def takes(x: Missing[Literal["a", "b"]]) -> None: ...
+
+def f(x: Literal["a"] | Literal[Unset._UNSET] | None) -> None:
+    takes(x)
+"#,
+);
+
+testcase!(
+    test_generic_alias_union_with_inline_enum_literal,
+    r#"
+from enum import Enum
+from typing import Literal, TypeAlias, TypeVar
+
+T = TypeVar("T")
+
+class Unset(Enum):
+    _UNSET = "UNSET"
+
+UNSET: Literal[Unset._UNSET] = Unset._UNSET
+Missing: TypeAlias = Literal[Unset._UNSET] | T | None
+
+def takes(x: Missing[Literal["a", "b"]]) -> None: ...
+
+def or_unset[U](v: U | None) -> U | Literal[Unset._UNSET]:
+    return UNSET if v is None else v
+
+def f(s: Literal["a"] | None) -> None:
+    takes(or_unset(s))
+"#,
+);
+
+testcase!(
     test_ordinary_alias_union_retains_precise_members,
     r#"
 from collections.abc import Iterable, Mapping
@@ -1447,4 +1519,22 @@ from typing import TypeAlias
 X: TypeAlias = int | str
 X()  # E: Expected a callable
     "#,
+);
+
+testcase!(
+    test_enum_literal_union_member_compatibility,
+    r#"
+from enum import Enum
+from typing import Literal
+
+class Unset(Enum):
+    _UNSET = "UNSET"
+
+def takes_member(x: Literal["a", "b", Unset._UNSET] | None) -> None: ...
+def takes_class(x: Literal["a", "b"] | Unset | None) -> None: ...
+
+def f(x: Literal["a"] | Literal[Unset._UNSET] | None) -> None:
+    takes_member(x)
+    takes_class(x)
+"#,
 );

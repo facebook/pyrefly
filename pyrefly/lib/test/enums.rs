@@ -449,6 +449,7 @@ def f(test: bool, e1: E1, e2: E2):
     x: Literal[E1.X, E1.Y] = e1
     y: Literal[E1.X, E1.Y, 1] = e1
     z: Literal[E2.X, E2.Y] = e2  # E: `E2` is not assignable to `Literal[E2.X, E2.Y]`
+    single: Literal[E2.X] = e2  # E: `E2` is not assignable to `Literal[E2.X]`
     "#,
 );
 
