@@ -875,7 +875,7 @@ Configure the severity for each kind of error that Pyrefly emits: `error`, `warn
 Want full type-check squiggles in your editor? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`).
 :::
 
-- Type: Table of [error code](./error-kinds.mdx) to boolean representing enabled status
+- Type: Table of [error code](./error-kinds.mdx) to a severity (`"error"`, `"warn"`, `"info"`, `"hint"`, or `"ignore"`) or a boolean
 - Default: `errors = {}`/`[errors]`
 - Flag equivalent: `--error`, `--warn`, `--ignore`
 - Equivalent configs:
@@ -886,6 +886,8 @@ Want full type-check squiggles in your editor? Run `pyrefly init` to create a `p
   [`disable_error_code`](https://mypy.readthedocs.io/en/stable/config_file.html#confval-disable_error_code)
   in mypy
 - Notes:
+    - Setting `<error-code> = "<severity>"` (for example, `bad-return = "warn"`) shows the
+      error at that severity.
     - Setting `<error-code> = true` means the error will be shown at default
       severity (or severity `ERROR` if the error is off by default). Setting
       `<error-code> = false` will disable the error for type checking.
