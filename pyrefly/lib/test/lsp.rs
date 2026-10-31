@@ -27,6 +27,7 @@ mod local_find_refs;
 mod lsp_interaction;
 mod qualified_name;
 mod rename;
+mod safe_delete_file;
 mod semantic_tokens;
 mod signature_help;
 mod type_definition;
