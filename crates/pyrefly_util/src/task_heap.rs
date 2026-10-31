@@ -23,7 +23,7 @@ use crate::lock::Mutex;
 #[derive(Debug)]
 pub struct Cancelled;
 
-#[derive(Clone, Dupe)]
+#[derive(Clone, Default, Dupe)]
 pub struct CancellationHandle(Arc<AtomicBool>);
 
 impl CancellationHandle {

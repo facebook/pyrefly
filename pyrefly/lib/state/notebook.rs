@@ -21,22 +21,34 @@ pub struct LspNotebook {
     // Notebook cells have Urls of unspecified format
     cell_url_to_index: SmallMap<Uri, usize>,
     cell_index_to_url: Vec<Uri>,
+    cell_versions: SmallMap<Uri, i32>,
 }
 
 impl LspNotebook {
-    pub fn new(ruff_notebook: Notebook, notebook_document: NotebookDocument) -> Self {
+    pub fn new(
+        ruff_notebook: Notebook,
+        notebook_document: NotebookDocument,
+        mut cell_versions: SmallMap<Uri, i32>,
+    ) -> Self {
         let mut cell_url_to_index = SmallMap::new();
         let mut cell_index_to_url = Vec::new();
         for (idx, cell) in notebook_document.cells.iter().enumerate() {
             cell_url_to_index.insert(cell.document.clone(), idx);
             cell_index_to_url.push(cell.document.clone());
         }
+        cell_versions.retain(|uri, _| cell_url_to_index.contains_key(uri));
         Self {
             ruff_notebook: Arc::new(ruff_notebook),
             notebook_document,
             cell_url_to_index,
             cell_index_to_url,
+            cell_versions,
         }
+    }
+
+    /// Cell text versions are independent of the notebook version.
+    pub fn cell_versions(&self) -> &SmallMap<Uri, i32> {
+        &self.cell_versions
     }
 
     pub fn notebook_document(&self) -> &NotebookDocument {
@@ -140,7 +152,7 @@ mod tests {
             .clone()
             .to_ruff_notebook(&cell_content)
             .unwrap();
-        let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_doc);
+        let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_doc, SmallMap::new());
 
         // First code cell (all-cells index 0) → code-cell index 0
         assert_eq!(lsp_notebook.get_code_cell_index(&cell0_url), Some(0));
