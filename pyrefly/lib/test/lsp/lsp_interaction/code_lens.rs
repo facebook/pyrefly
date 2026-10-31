@@ -318,7 +318,6 @@ fn test_override_code_lens_notebook_cell_versions() {
     interaction.shutdown().unwrap();
 }
 
-// Known bug: the cell version lookup does not resolve the containing unsaved notebook.
 #[test]
 fn test_override_code_lens_unsaved_notebook() {
     let root = get_test_files_root();
@@ -342,7 +341,13 @@ fn test_override_code_lens_unsaved_notebook() {
     interaction
         .client
         .send_request::<OverrideCodeLensRequest>(params.clone())
-        .expect_response_error_code(-32800)
+        .expect_response_with(|targets: Vec<OverrideCodeLensTargets>| {
+            targets.len() == 1
+                && targets[0].parents.len() == 1
+                && targets[0].parents[0].name == "Base.f"
+                && targets[0].parents[0].location.uri == uri
+                && targets[0].parents[0].location.range.start.line == 1
+        })
         .unwrap();
     params["textDocument"]["version"] = json!(0);
     interaction

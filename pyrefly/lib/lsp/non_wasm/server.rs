@@ -6055,7 +6055,7 @@ impl Server {
 
     /// Returns the text document version, including versions of individual notebook cells.
     fn text_document_version(&self, uri: &Uri) -> Option<i32> {
-        let path = self.path_for_uri(uri)?;
+        let path = self.path_for_uri_or_notebook_cell(uri)?;
         if self.open_notebook_cells.read().contains_key(uri) {
             let files = self.open_files.read();
             let LspFile::Notebook(notebook) = files.get(&path)?.as_ref() else {
