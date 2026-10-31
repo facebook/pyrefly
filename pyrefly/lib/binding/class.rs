@@ -75,6 +75,7 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
+use crate::binding::django::collect_django_queryset_only;
 use crate::binding::expr::Usage;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::ClassIndices;
@@ -457,6 +458,7 @@ impl<'a> BindingsBuilder<'a> {
             self.class_scopes
                 .push((body_range, class_indices.class_idx));
         }
+        let django_queryset_only = collect_django_queryset_only(&body);
         self.init_static_scope(&body, false);
         self.stmts(
             body,
@@ -524,7 +526,8 @@ impl<'a> BindingsBuilder<'a> {
                     attrs_field_specifier,
                     range,
                     docstring_range,
-                ),
+                )
+                .with_django_queryset_only(django_queryset_only.get(name.key()).copied()),
             );
             let key_field = KeyClassField(class_indices.def_index, name.clone().into_key());
             let binding = BindingClassField {
