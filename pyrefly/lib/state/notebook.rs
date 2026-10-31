@@ -160,5 +160,20 @@ mod tests {
         assert_eq!(lsp_notebook.get_code_cell_index(&cell1_url), None);
         // Second code cell (all-cells index 2) → code-cell index 1
         assert_eq!(lsp_notebook.get_code_cell_index(&cell2_url), Some(1));
+
+        assert_eq!(lsp_notebook.get_code_cell_url(0), Some(&cell0_url));
+        // Known bug: the reverse lookup treats code-cell indices as all-cell indices.
+        assert_eq!(lsp_notebook.get_code_cell_url(1), Some(&cell1_url));
+        assert_eq!(lsp_notebook.get_code_cell_url(2), Some(&cell2_url));
+        assert_eq!(lsp_notebook.get_code_cell_url(3), None);
+        assert_eq!(
+            lsp_notebook.code_cell_urls(),
+            &vec![cell0_url.clone(), cell1_url.clone(), cell2_url.clone()]
+        );
+        assert_eq!(lsp_notebook.get_cell_contents(&cell1_url), None);
+        assert_eq!(
+            lsp_notebook.get_cell_contents(&cell2_url).as_deref(),
+            Some("y = 2")
+        );
     }
 }

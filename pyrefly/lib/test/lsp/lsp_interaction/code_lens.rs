@@ -358,6 +358,62 @@ fn test_override_code_lens_unsaved_notebook() {
     interaction.shutdown().unwrap();
 }
 
+// Known bug: target conversion uses code-cell indices to select from all notebook cells.
+#[test]
+fn test_override_code_lens_mixed_notebook_cells() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(Default::default()).unwrap();
+    interaction.open_notebook_with_kinds(
+        "mixed_overrides.ipynb",
+        vec![
+            (CellKind::Markdown, "# Models"),
+            (CellKind::Code, "class Base:\n    def f(self): pass\n"),
+            (
+                CellKind::Code,
+                "class Child(Base):\n    def f(self): pass\n",
+            ),
+        ],
+    );
+    let markdown_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell1");
+    let base_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell2");
+    let child_uri = interaction.cell_uri("mixed_overrides.ipynb", "cell3");
+    let ranges = json!([{
+        "start": {"line": 1, "character": 8},
+        "end": {"line": 1, "character": 9}
+    }]);
+    interaction
+        .client
+        .send_request::<OverrideCodeLensRequest>(json!({
+            "textDocument": {"uri": base_uri.to_string(), "version": 1},
+            "ranges": ranges
+        }))
+        .expect_response_with(|targets: Vec<OverrideCodeLensTargets>| {
+            targets.len() == 1
+                && targets[0].implementations.len() == 1
+                && targets[0].implementations[0].name == "Child.f"
+                && targets[0].implementations[0].location.uri == base_uri
+                && targets[0].implementations[0].location.range.start.line == 1
+        })
+        .unwrap();
+    interaction
+        .client
+        .send_request::<OverrideCodeLensRequest>(json!({
+            "textDocument": {"uri": child_uri.to_string(), "version": 1},
+            "ranges": ranges
+        }))
+        .expect_response_with(|targets: Vec<OverrideCodeLensTargets>| {
+            targets.len() == 1
+                && targets[0].parents.len() == 1
+                && targets[0].parents[0].name == "Base.f"
+                && targets[0].parents[0].location.uri == markdown_uri
+                && targets[0].parents[0].location.range.start.line == 1
+        })
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_override_code_lens_refresh_after_subclass_change() {
     let root = get_test_files_root();
