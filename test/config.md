@@ -113,3 +113,26 @@ $ mkdir -p $TMPDIR/untyped_import/site_packages/pandas && \
  INFO 0 errors
 [0]
 ```
+
+## `required-version` that the running Pyrefly does not satisfy
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/required_version && \
+> echo 'required-version = "<0"' > $TMPDIR/required_version/pyrefly.toml && \
+> echo "x = 1" > $TMPDIR/required_version/a.py && \
+> echo "x: str = 1" > $TMPDIR/required_version/b.py && \
+> cd $TMPDIR/required_version && $PYREFLY check --output-format=min-text
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ERROR */pyrefly.toml: Pyrefly * does not satisfy `required-version = "<0"` (glob)
+Fatal configuration error
+[1]
+```
+
+With several files to check, the check runs anyway.
+
+```scrut {output_stream: stderr}
+$ cd $TMPDIR/required_version && $PYREFLY check a.py b.py --output-format=min-text
+ERROR */pyrefly.toml: Pyrefly * does not satisfy `required-version = "<0"` (glob)
+ INFO 2 errors
+[1]
+```

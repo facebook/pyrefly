@@ -138,3 +138,20 @@ $ CONDA_PROJECT=$(mktemp -d -p /tmp conda.XXXXXX) && \
  INFO 0 errors* (glob)
 [0]
 ```
+
+## A different Pyrefly version in the project environment
+
+```scrut {output_stream: stderr}
+$ VENV_PROJECT=$(mktemp -d -p /tmp venv.XXXXXX) && \
+> python3 -m venv $VENV_PROJECT/venv 2>$TMPDIR/venv_stderr || \
+> { cat $TMPDIR/venv_stderr >&2; false; } && \
+> site_packages=$($VENV_PROJECT/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
+> mkdir $site_packages/pyrefly-0.0.1.dist-info && \
+> printf 'Metadata-Version: 2.1\nName: pyrefly\nVersion: 0.0.1\n' > $site_packages/pyrefly-0.0.1.dist-info/METADATA && \
+> touch $VENV_PROJECT/pyrefly.toml && \
+> echo "x = 1" > $VENV_PROJECT/test.py && \
+> env -u VIRTUAL_ENV -u CONDA_PREFIX $PYREFLY check $VENV_PROJECT/test.py; \
+> STATUS=$?; rm -rf $VENV_PROJECT; exit $STATUS
+ INFO 0 errors* (glob)
+[0]
+```
