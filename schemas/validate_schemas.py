@@ -65,6 +65,21 @@ def _make_validator(schema_file: Path):
 class TestPositiveValidation(unittest.TestCase):
     """Positive tests: valid config files should pass schema validation."""
 
+    def test_class_decorator_behavior(self) -> None:
+        validator = _make_validator(SCHEMAS_DIR / "pyrefly.json")
+        for value in ("ignore", "ignore-untyped", "apply"):
+            with self.subTest(value=value):
+                validator.validate({"class-decorator-behavior": value})
+                validator.validate(
+                    {
+                        "sub-config": [
+                            {"matches": "legacy/**", "class-decorator-behavior": value}
+                        ]
+                    }
+                )
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({"class-decorator-behavior": "invalid"})
+
     def test_pyrefly_toml(self) -> None:
         toml_file = SCHEMAS_DIR / "test-pyrefly.toml"
         schema_file = SCHEMAS_DIR / "pyrefly.json"

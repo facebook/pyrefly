@@ -47,6 +47,7 @@ use ruff_text_size::TextSize;
 use tempfile::TempDir;
 
 use crate::binding::binding::KeyExport;
+use crate::config::base::ClassDecoratorBehavior;
 use crate::config::base::InferReturnTypes;
 use crate::config::base::UntypedDefBehavior;
 use crate::config::config::ConfigFile;
@@ -252,6 +253,7 @@ pub struct TestEnv {
     platform: PythonPlatform,
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
+    class_decorator_behavior: ClassDecoratorBehavior,
     infer_with_first_use: bool,
     non_exhaustive_match_open_type_error: bool,
     recursion_depth_limit: Option<u32>,
@@ -327,6 +329,7 @@ impl TestEnv {
             platform: PythonPlatform::default(),
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
+            class_decorator_behavior: ClassDecoratorBehavior::default(),
             infer_with_first_use: true,
             non_exhaustive_match_open_type_error: false,
             recursion_depth_limit: None,
@@ -474,6 +477,11 @@ impl TestEnv {
         let mut res = Self::new();
         res.infer_with_first_use = infer_with_first_use;
         res
+    }
+
+    pub fn with_class_decorator_behavior(mut self, behavior: ClassDecoratorBehavior) -> Self {
+        self.class_decorator_behavior = behavior;
+        self
     }
 
     pub fn with_recursion_depth_limit(mut self, recursion_depth_limit: u32) -> Self {
@@ -843,6 +851,7 @@ impl TestEnv {
         config.python_environment.site_package_path = Some(self.site_package_path.clone());
         config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
         config.root.infer_return_types = Some(self.infer_return_types);
+        config.root.class_decorator_behavior = Some(self.class_decorator_behavior);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
         config.root.recursion_depth_limit = self.recursion_depth_limit;
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);

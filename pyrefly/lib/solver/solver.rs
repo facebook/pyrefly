@@ -52,6 +52,7 @@ use vec1::Vec1;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
+use crate::config::base::ClassDecoratorBehavior;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorBuilder;
 use crate::error::collector::ErrorCollector;
@@ -559,6 +560,7 @@ struct VarState {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SolverConfig {
+    pub class_decorator_behavior: ClassDecoratorBehavior,
     pub infer_with_first_use: bool,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
@@ -4547,6 +4549,7 @@ mod tests {
     #[test]
     fn finishing_takes_the_restriction_record_off_the_answer() {
         let solver = Solver::new(SolverConfig {
+            class_decorator_behavior: ClassDecoratorBehavior::default(),
             infer_with_first_use: true,
             tensor_shapes: false,
             strict_callable_subtyping: false,

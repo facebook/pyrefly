@@ -2064,6 +2064,67 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.singledispatch_dispatcher_as_callback(widened, &application.original_decoratee)
     }
 
+    pub(crate) fn apply_class_decorator(
+        &self,
+        decorator: Type,
+        decoratee: Type,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if self.stdlib.is_bootstrapping() {
+            return decoratee;
+        }
+        let preserves_class = match &decorator {
+            Type::KwCall(call) => {
+                call.func_metadata
+                    .flags
+                    .dataclass_transform_metadata
+                    .is_some()
+                    || call.has_function_kind(FunctionKind::Dataclass)
+                    || call.has_function_kind(FunctionKind::DataclassTransform)
+                    || call.has_function_kind(FunctionKind::DisjointBase)
+                    || call.has_function_kind(FunctionKind::Final)
+                    || call.has_function_kind(FunctionKind::RuntimeCheckable)
+                    || call.has_function_kind(FunctionKind::TotalOrdering)
+            }
+            _ => decorator.toplevel_func_metadata().is_some_and(|meta| {
+                meta.flags.dataclass_transform_metadata.is_some()
+                    || matches!(
+                        meta.kind,
+                        FunctionKind::Dataclass
+                            | FunctionKind::DataclassTransform
+                            | FunctionKind::DisjointBase
+                            | FunctionKind::Final
+                            | FunctionKind::RuntimeCheckable
+                            | FunctionKind::TotalOrdering
+                    )
+            }),
+        };
+        if preserves_class {
+            return decoratee;
+        }
+        let call_target =
+            self.as_call_target_or_error(decorator, CallStyle::FreeForm, range, errors, None);
+        // Keep the class's type parameters concrete during inference, just as for generic
+        // function decorators. Promoting a class definition here would replace them with defaults.
+        let (decoratee_tparams, decoratee_arg) = match &decoratee {
+            Type::ClassDef(cls) => (
+                self.get_class_tparams(cls).cloned(),
+                self.heap.mk_type_of(self.instantiate(cls)),
+            ),
+            _ => (None, decoratee.clone()),
+        };
+        let arg = CallArg::ty(&decoratee_arg, range);
+        let decorated = self
+            .call_infer(call_target, &[arg], &[], range, errors, None, None, None)
+            .ty;
+        if decorated == decoratee_arg {
+            decoratee
+        } else {
+            self.restore_decoratee_generics(decorated, decoratee_tparams)
+        }
+    }
+
     /// For a type guard function, validate whether it has at least one
     /// positional argument.
     fn validate_type_guard_positional_argument_count(
