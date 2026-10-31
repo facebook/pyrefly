@@ -592,6 +592,7 @@ impl<'a> Transaction<'a> {
                                 && param_match.name.as_str() != "__self"
                                 && param_match.name.as_str() != "cls"
                                 && param_match.name.as_str() != "_cls"
+                                && !matches!(arg, Expr::Name(name) if name.id == *param_match.name)
                             {
                                 param_hints.push((
                                     arg.range().start(),

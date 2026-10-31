@@ -701,6 +701,45 @@ test("a", "b")
 }
 
 #[test]
+fn test_issue_5105_hide_hint_when_arg_matches_param_name() {
+    // A matching name is hidden while a different name still shows.
+    let code = r#"
+def foo(a: int, b: int) -> None:
+    pass
+
+a = 1
+c = 2
+foo(a, c)
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["b= "]);
+
+    // Every argument matching leaves no hints.
+    let code = r#"
+def foo(a: int, b: int) -> None:
+    pass
+
+a = 1
+b = 2
+foo(a, b)
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), Vec::<String>::new());
+
+    // obj.a against parameter a still shows a=, so only plain names are suppressed.
+    let code = r#"
+class Box:
+    a: int = 1
+
+def foo(a: int, b: int) -> None:
+    pass
+
+obj = Box()
+c = 2
+foo(obj.a, c)
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["a= ", "b= "]);
+}
+
+#[test]
 fn test_parameter_name_hints_with_varargs() {
     let code = r#"
 def foo(s: str, *args: int, a: int, b: int, t: int) -> None:
