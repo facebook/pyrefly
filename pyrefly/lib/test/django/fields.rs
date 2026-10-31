@@ -7,6 +7,46 @@
 
 use crate::django_testcase;
 
+// https://github.com/facebook/pyrefly/issues/5322
+django_testcase!(
+    test_field_expression_assignment,
+    r#"
+from typing import assert_type
+from django.db import models
+from django.db.models import F, Value
+
+class Book(models.Model):
+    is_draft = models.BooleanField()
+    pages = models.IntegerField()
+    title = models.CharField(max_length=100)
+    optional_pages = models.IntegerField(null=True)
+    ordinary: bool = False
+
+def update(book: Book) -> None:
+    book.is_draft = F("other")
+    assert_type(book.is_draft, bool)
+    book.is_draft = Value(True)
+    assert_type(book.is_draft, bool)
+    book.pages = F("pages") + 1
+    assert_type(book.pages, int)
+    book.title = Value("New title")
+    assert_type(book.title, str)
+    book.optional_pages = F("pages")
+    assert_type(book.optional_pages, int | None)
+    book.optional_pages = None
+    book.is_draft = "invalid"  # E: is not assignable to attribute `is_draft`
+    book.is_draft = None  # E: is not assignable to attribute `is_draft`
+    book.ordinary = F("other")  # E: is not assignable to attribute `ordinary`
+
+class SpecialBook(Book):
+    pass
+
+def update_subclass(book: SpecialBook) -> None:
+    book.is_draft = F("other")
+    assert_type(book.is_draft, bool)
+"#,
+);
+
 django_testcase!(
     test_textfield_nullable,
     r#"
