@@ -46,6 +46,67 @@ def test(f: type[A | B]) -> A | B:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1134
+testcase!(
+    test_generic_constructor_union,
+    r#"
+class A[T]:
+    def __init__(self, value: T):
+        self.value = value
+
+def f(value: int | str):
+    _: A[int] | A[str] = A(value)
+
+class Pair[T]:
+    def __init__(self, x: T, y: T): ...
+
+def g(x: int | str, y: int | str):
+    # Expanding both arguments includes mixed pairs, so the union is not safe.
+    _: Pair[int] | Pair[str] = Pair(x, y)  # E: `Pair[int | str]` is not assignable to `Pair[int] | Pair[str]`
+"#,
+);
+
+testcase!(
+    test_generic_constructor_union_diagnostics,
+    r#"
+from typing import cast
+from typing_extensions import deprecated
+
+class A[T]:
+    @deprecated("old constructor")
+    def __init__(self, value: T) -> None: ...
+
+class B[T]:
+    def __init__(self, value: T) -> None: ...
+
+@deprecated("old factory")
+def old_factory() -> int | str: ...
+
+def f(value: int | str) -> None:
+    constructor: A[int] | A[str] = A(value)  # E: `A.__init__` is deprecated
+    factory: B[int] | B[str] = B(old_factory())  # E: `old_factory` is deprecated
+    redundant_cast: B[int] | B[str] = B(cast(int | str, value))  # E: Redundant cast
+    keyword_factory: B[int] | B[str] = B(value=old_factory())  # E: `old_factory` is deprecated
+    keyword_cast: B[int] | B[str] = B(value=cast(int | str, value))  # E: Redundant cast
+"#,
+);
+
+testcase!(
+    test_generic_constructor_union_rejected_expansion_diagnostics,
+    r#"
+from typing_extensions import deprecated
+
+class Pair[T, U]:
+    @deprecated("old constructor")
+    def __init__(self, x: T, y: U) -> None: ...
+
+def f(x: int | str, y: int | str) -> None:
+    # Expanding x alone accepts the int branch but rejects the str branch.
+    # Expanding y as well accepts every branch without retaining rejected call errors.
+    pair: Pair[int, int | str] | Pair[str, int] | Pair[str, str] = Pair(x, y)  # E: `Pair.__init__` is deprecated
+"#,
+);
+
 testcase!(
     test_generic_class,
     r#"
