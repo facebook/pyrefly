@@ -210,12 +210,71 @@ pub enum MigrationSource {
     Pyright,
 }
 
+/// Relative path written into the migrated config when a basedpyright baseline is found.
+const PYREFLY_BASELINE_FILE: &str = "pyrefly_baseline.json";
+
+/// basedpyright's default baseline location, relative to the config directory.
+const BASEDPYRIGHT_BASELINE_FILE: &str = ".basedpyright/baseline.json";
+
+/// Where a migrated config was written, and the new baseline path when one was configured.
+#[derive(Debug, PartialEq, Eq)]
+pub struct MigrationResult {
+    /// Where the Pyrefly config was written, or would be written in a dry run.
+    pub config_path: PathBuf,
+    /// Relative `baseline` path recorded in that config. The baseline file is not created here.
+    pub migrated_baseline: Option<PathBuf>,
+}
+
+/// How to look for an existing basedpyright baseline while migrating a config.
+#[derive(Debug)]
+enum BasedpyrightBaseline {
+    /// The source config is not pyright or basedpyright.
+    NotApplicable,
+    /// A pyright-family config that does not set `baselineFile`.
+    DefaultLocation,
+    /// `baselineFile` from a pyright-family config, relative to the config directory.
+    Explicit(PathBuf),
+}
+
+fn basedpyright_baseline_setting(baseline_file: Option<PathBuf>) -> BasedpyrightBaseline {
+    match baseline_file {
+        Some(path) => BasedpyrightBaseline::Explicit(path),
+        None => BasedpyrightBaseline::DefaultLocation,
+    }
+}
+
+/// Resolve the basedpyright baseline and, when that file exists, point the
+/// migrated config at a fresh Pyrefly baseline in the project root.
+fn apply_migrated_baseline(
+    config: &mut ConfigFile,
+    config_dir: &Path,
+    setting: BasedpyrightBaseline,
+) -> Option<PathBuf> {
+    let relative = match setting {
+        BasedpyrightBaseline::NotApplicable => return None,
+        BasedpyrightBaseline::DefaultLocation => Path::new(BASEDPYRIGHT_BASELINE_FILE),
+        BasedpyrightBaseline::Explicit(ref path) => path.as_path(),
+    };
+    let found = config_dir.join(relative);
+    if !found.is_file() {
+        return None;
+    }
+    let configured = PathBuf::from(PYREFLY_BASELINE_FILE);
+    info!(
+        "Found basedpyright baseline at {}; configured pyrefly baseline at {}",
+        found.display(),
+        configured.display()
+    );
+    config.baseline = Some(configured.clone());
+    Some(configured)
+}
+
 /// Migrate the config file at a given location (pyproject, mypy, pyright etc), producing a new file.
 /// In some cases, e.g. pyproject, we will modify the original file in-place.
 ///
 /// When `dry_run` is true, no files are created or modified: the migrated config
-/// is computed and printed to the log, and the returned `PathBuf` is the path
-/// where the config *would* have been written.
+/// is computed and printed to the log, and `MigrationResult::config_path` is the
+/// path where the config *would* have been written.
 ///
 /// When `print_config` is true, the migrated config TOML is also written to
 /// stdout (independent of `dry_run`), so downstream tooling can capture it.
@@ -224,7 +283,7 @@ pub fn config_migration(
     migrate_from: MigrationSource,
     dry_run: bool,
     print_config: bool,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<MigrationResult> {
     // TODO: This code is written in a fairly weird style. Give it a nicer interface
     //       without bothering to refactor the internals just yet.
     Args {
@@ -258,24 +317,33 @@ impl Args {
     fn load_from_pyproject(
         original_config_path: &Path,
         migrate_from: MigrationSource,
-    ) -> anyhow::Result<ConfigFile> {
+    ) -> anyhow::Result<(ConfigFile, BasedpyrightBaseline)> {
         let raw_file = fs_anyhow::read_to_string(original_config_path)?;
         let parent = original_config_path.parent().unwrap().display();
 
         let try_mypy = || {
-            mypy::parse_pyproject_config(&raw_file).inspect(|_| {
-                info!("Migrating [tool.mypy] config from pyproject.toml in `{parent}`")
-            })
+            mypy::parse_pyproject_config(&raw_file)
+                .inspect(|_| {
+                    info!("Migrating [tool.mypy] config from pyproject.toml in `{parent}`")
+                })
+                .map(|config| (config, BasedpyrightBaseline::NotApplicable))
+        };
+        let try_pyright_section = |log: &str| {
+            pyright::parse_pyproject_section(&raw_file)
+                .inspect(|_| info!("{log}"))
+                .map(|(config, baseline_file)| {
+                    (config, basedpyright_baseline_setting(baseline_file))
+                })
         };
         let try_pyright = || {
-            pyright::parse_pyproject_toml(&raw_file).inspect(|_| {
-                info!("Migrating [tool.pyright] config from pyproject.toml in `{parent}`")
-            })
+            try_pyright_section(&format!(
+                "Migrating [tool.pyright] config from pyproject.toml in `{parent}`"
+            ))
         };
         let try_basedpyright = || {
-            pyright::parse_pyproject_toml(&raw_file).inspect(|_| {
-                info!("Migrating [tool.basedpyright] config from pyproject.toml in `{parent}`")
-            })
+            try_pyright_section(&format!(
+                "Migrating [tool.basedpyright] config from pyproject.toml in `{parent}`"
+            ))
         };
 
         match migrate_from {
@@ -316,8 +384,8 @@ impl Args {
     }
 
     /// This function handles finding the config file if needed, loading it, and converting it to a Pyrefly config.
-    /// It returns the config and the path to the original config file.
-    fn load_config(&self) -> anyhow::Result<(ConfigFile, PathBuf)> {
+    /// It returns the config, the path to the original config file, and how to find a basedpyright baseline.
+    fn load_config(&self) -> anyhow::Result<(ConfigFile, PathBuf, BasedpyrightBaseline)> {
         if !self.original_config_path.exists() {
             return Err(anyhow::anyhow!(
                 "Could not find or access config file `{}`",
@@ -332,7 +400,9 @@ impl Args {
                 .ok_or_else(|| anyhow::anyhow!("Failed to find config"))?
         };
 
-        let config = if original_config_path.file_name() == Some("pyrightconfig.json".as_ref()) {
+        let (config, baseline) = if original_config_path.file_name()
+            == Some("pyrightconfig.json".as_ref())
+        {
             info!(
                 "Migrating pyright config file from: `{}`",
                 original_config_path.display()
@@ -340,13 +410,17 @@ impl Args {
             let raw_file = fs_anyhow::read_to_string(&original_config_path)?;
             let pyr = PyrightConfig::parse(&raw_file)?;
             // assume pyrightconfig.json is for pyright, not basedpyright
-            pyr.convert()
+            let baseline = basedpyright_baseline_setting(pyr.baseline_file.clone());
+            (pyr.convert(), baseline)
         } else if original_config_path.file_name() == Some("mypy.ini".as_ref()) {
             info!(
                 "Migrating mypy config file from: `{}`",
                 original_config_path.display()
             );
-            parse_mypy_config(&original_config_path)?
+            (
+                parse_mypy_config(&original_config_path)?,
+                BasedpyrightBaseline::NotApplicable,
+            )
         } else if original_config_path.file_name() == Some("pyproject.toml".as_ref()) {
             Self::load_from_pyproject(&original_config_path, self.migrate_from)
                 .context("Failed to load config from pyproject.toml")?
@@ -359,11 +433,18 @@ impl Args {
 
         Self::check_and_warn(&config);
 
-        Ok((config, original_config_path))
+        Ok((config, original_config_path, baseline))
     }
 
-    fn run(&self) -> anyhow::Result<PathBuf> {
-        let (config, original_config_path) = self.load_config()?;
+    fn run(&self) -> anyhow::Result<MigrationResult> {
+        let (mut config, original_config_path, baseline_setting) = self.load_config()?;
+        let config_dir = original_config_path.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Config path `{}` has no parent directory",
+                original_config_path.display()
+            )
+        })?;
+        let migrated_baseline = apply_migrated_baseline(&mut config, config_dir, baseline_setting);
 
         let pyrefly_config_path = {
             if original_config_path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) {
@@ -398,7 +479,10 @@ impl Args {
             }
             PyProject::update(&pyrefly_config_path, config)?;
             info!("Config written to `{}`", pyrefly_config_path.display());
-            return Ok(pyrefly_config_path);
+            return Ok(MigrationResult {
+                config_path: pyrefly_config_path,
+                migrated_baseline,
+            });
         }
 
         let serialized = toml::to_string_pretty(&config)?;
@@ -422,7 +506,10 @@ impl Args {
             print!("{serialized}");
             std::io::stdout().flush().ok();
         }
-        Ok(pyrefly_config_path)
+        Ok(MigrationResult {
+            config_path: pyrefly_config_path,
+            migrated_baseline,
+        })
     }
 }
 
@@ -480,7 +567,8 @@ mod tests {
         fs_anyhow::write(&original_config_path, pyr)?;
 
         let pyrefly_config_path =
-            config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+            config_migration(&original_config_path, MigrationSource::Auto, false, false)?
+                .config_path;
         let output = fs_anyhow::read_to_string(&pyrefly_config_path)?; // We're not going to check the whole output because most of it will be default values, which may change.
         // We only actually care about the includes.
         let output_lines = output.lines().collect::<Vec<_>>();
@@ -517,7 +605,8 @@ check_untyped_defs = True
         fs_anyhow::write(&original_config_path, mypy)?;
 
         let pyrefly_config_path =
-            config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+            config_migration(&original_config_path, MigrationSource::Auto, false, false)?
+                .config_path;
 
         // We care about the config getting serialized in a way that can be checked-in to a repo,
         // i.e. without absolutized paths. So we need to check the raw file.
@@ -549,7 +638,8 @@ files = ["a.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
         let pyrefly_config_path =
-            config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+            config_migration(&original_config_path, MigrationSource::Auto, false, false)?
+                .config_path;
         assert_eq!(pyrefly_config_path, original_config_path);
         let pyproject = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(pyproject.lines().next().unwrap(), "[tool.mypy]");
@@ -655,7 +745,7 @@ include = ["pyright.py"]
 files = ["mypy.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        let cfg = Args::load_from_pyproject(&original_config_path, MigrationSource::Auto)?;
+        let (cfg, _) = Args::load_from_pyproject(&original_config_path, MigrationSource::Auto)?;
         assert_eq!(
             cfg.project_includes,
             Globs::new(vec!["mypy.py".to_owned()]).unwrap()
@@ -675,7 +765,7 @@ include = ["pyright.py"]
 files = ["mypy.py"]
 "#;
         fs_anyhow::write(&original_config_path, pyproject)?;
-        let cfg = Args::load_from_pyproject(&original_config_path, MigrationSource::Pyright)?;
+        let (cfg, _) = Args::load_from_pyproject(&original_config_path, MigrationSource::Pyright)?;
         assert_eq!(
             cfg.project_includes,
             Globs::new(vec!["pyright.py".to_owned()]).unwrap()
@@ -858,7 +948,8 @@ files = ["mypy.py"]
         fs_anyhow::write(&original_config_path, b"[mypy]\nfiles = abc\n")?;
 
         let returned = config_migration(&original_config_path, MigrationSource::Auto, true, false)?;
-        assert_eq!(returned, pyrefly_config_path);
+        assert_eq!(returned.config_path, pyrefly_config_path);
+        assert_eq!(returned.migrated_baseline, None);
         assert!(!pyrefly_config_path.exists());
         Ok(())
     }
@@ -873,6 +964,118 @@ files = ["mypy.py"]
         config_migration(&original_config_path, MigrationSource::Auto, true, false)?;
         let unchanged = fs_anyhow::read_to_string(&original_config_path)?;
         assert_eq!(unchanged, pyproject);
+        Ok(())
+    }
+
+    fn write_baseline(dir: &Path, relative: &str) -> anyhow::Result<()> {
+        let path = dir.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        fs_anyhow::write(&path, "{}\n")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_basedpyright_baseline_sets_pyrefly_baseline() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyrightconfig.json");
+        fs_anyhow::write(&original_config_path, "{}\n")?;
+        write_baseline(tmp.path(), ".basedpyright/baseline.json")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        assert_eq!(
+            result.migrated_baseline,
+            Some(PathBuf::from("pyrefly_baseline.json"))
+        );
+        let written = fs_anyhow::read_to_string(&tmp.path().join("pyrefly.toml"))?;
+        assert!(
+            written.contains("baseline = \"pyrefly_baseline.json\""),
+            "expected a pyrefly baseline path, got:\n{written}"
+        );
+        assert!(!tmp.path().join("pyrefly_baseline.json").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn test_explicit_baseline_file_is_honored() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        fs_anyhow::write(
+            &original_config_path,
+            "[tool.basedpyright]\nbaselineFile = \"custom/baseline.json\"\n",
+        )?;
+        write_baseline(tmp.path(), "custom/baseline.json")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        assert_eq!(
+            result.migrated_baseline,
+            Some(PathBuf::from("pyrefly_baseline.json"))
+        );
+        let written = fs_anyhow::read_to_string(&original_config_path)?;
+        assert!(written.contains("baseline = \"pyrefly_baseline.json\""));
+        Ok(())
+    }
+
+    #[test]
+    fn test_missing_basedpyright_baseline_sets_no_key() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        fs_anyhow::write(&original_config_path, "[tool.basedpyright]\n")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        assert_eq!(result.migrated_baseline, None);
+        let written = fs_anyhow::read_to_string(&original_config_path)?;
+        assert!(!written.contains("baseline ="));
+        Ok(())
+    }
+
+    #[test]
+    fn test_missing_explicit_baseline_file_does_not_use_default() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        fs_anyhow::write(
+            &original_config_path,
+            "[tool.basedpyright]\nbaselineFile = \"missing.json\"\n",
+        )?;
+        write_baseline(tmp.path(), ".basedpyright/baseline.json")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        assert_eq!(result.migrated_baseline, None);
+        let written = fs_anyhow::read_to_string(&original_config_path)?;
+        assert!(!written.contains("baseline ="));
+        Ok(())
+    }
+
+    #[test]
+    fn test_mypy_migration_ignores_basedpyright_baseline() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("mypy.ini");
+        fs_anyhow::write(&original_config_path, "[mypy]\nfiles = a.py\n")?;
+        write_baseline(tmp.path(), ".basedpyright/baseline.json")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        assert_eq!(result.migrated_baseline, None);
+        let written = fs_anyhow::read_to_string(&tmp.path().join("pyrefly.toml"))?;
+        assert!(!written.contains("baseline ="));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_reports_baseline_without_writing() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let original = "[tool.basedpyright]\n";
+        fs_anyhow::write(&original_config_path, original)?;
+        write_baseline(tmp.path(), ".basedpyright/baseline.json")?;
+
+        let result = config_migration(&original_config_path, MigrationSource::Auto, true, false)?;
+        assert_eq!(
+            result.migrated_baseline,
+            Some(PathBuf::from("pyrefly_baseline.json"))
+        );
+        assert_eq!(fs_anyhow::read_to_string(&original_config_path)?, original);
+        assert!(!tmp.path().join("pyrefly_baseline.json").exists());
         Ok(())
     }
 

@@ -20,6 +20,7 @@ pub fn default_pyright_config() -> PyrightConfig {
         type_checking_mode: None,
         errors: RuleOverrides::default(),
         execution_environments: vec![],
+        baseline_file: None,
         is_basedpyright: false,
     }
 }
