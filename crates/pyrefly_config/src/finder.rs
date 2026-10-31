@@ -35,6 +35,9 @@ use crate::error_kind::Severity;
 pub struct ConfigError {
     severity: Severity,
     msg: anyhow::Error,
+    /// Whether the error reports that the running Pyrefly is not the version that the project
+    /// requires, which the CLI check reports with its own exit code.
+    is_version_mismatch: bool,
 }
 
 impl ConfigError {
@@ -42,6 +45,7 @@ impl ConfigError {
         Self {
             severity: Severity::Error,
             msg,
+            is_version_mismatch: false,
         }
     }
 
@@ -49,6 +53,15 @@ impl ConfigError {
         Self {
             severity: Severity::Warn,
             msg,
+            is_version_mismatch: false,
+        }
+    }
+
+    pub fn version_mismatch(msg: anyhow::Error) -> Self {
+        Self {
+            severity: Severity::Error,
+            msg,
+            is_version_mismatch: true,
         }
     }
 
@@ -71,11 +84,16 @@ impl ConfigError {
         ConfigError {
             severity: self.severity,
             msg: self.msg.context(context),
+            is_version_mismatch: self.is_version_mismatch,
         }
     }
 
     pub fn severity(&self) -> Severity {
         self.severity
+    }
+
+    pub fn is_version_mismatch(&self) -> bool {
+        self.is_version_mismatch
     }
 
     pub fn get_message(&self) -> String {

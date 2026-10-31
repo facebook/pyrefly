@@ -125,7 +125,7 @@ $ mkdir $TMPDIR/required_version && \
  INFO Checking project configured at `*/pyrefly.toml` (glob)
 ERROR */pyrefly.toml: Pyrefly * does not satisfy `required-version = "<0"` (glob)
 Fatal configuration error
-[1]
+[4]
 ```
 
 With several files to check, the check runs anyway.

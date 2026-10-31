@@ -2058,7 +2058,7 @@ impl ConfigFile {
                             .parse::<Version>()
                             .expect("Pyrefly's package version must be PEP 440 compatible");
                         if !specifiers.contains(&parsed_running_version) {
-                            errors.push(ConfigError::error(anyhow!(
+                            errors.push(ConfigError::version_mismatch(anyhow!(
                                 "Pyrefly {running_version} does not satisfy `required-version = \"{required_version}\"`"
                             )));
                         }

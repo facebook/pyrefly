@@ -12,6 +12,7 @@ use clap::Parser;
 use pyrefly_util::args::clap_env;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::trace::init_tracing;
+use thiserror::Error;
 
 /// Arguments shared between all commands.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -70,6 +71,17 @@ pub enum CommandExitStatus {
     /// An error occurred in the environment or the underlying infrastructure,
     /// which prevents the command from completing.
     InfraError,
+}
+
+/// A fatal configuration error because the running Pyrefly is not the version that the project
+/// requires. The config error that explains it is printed first.
+#[derive(Debug, Error)]
+#[error("Fatal configuration error")]
+pub struct VersionMismatch;
+
+impl VersionMismatch {
+    /// The exit code of a command that fails with this error.
+    pub const EXIT_CODE: u8 = 4;
 }
 
 impl CommandExitStatus {

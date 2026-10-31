@@ -21,6 +21,7 @@ use clap_complete::generate;
 use library::Command as StandardCommand;
 use library::util::CommandExitStatus;
 use library::util::CommonGlobalArgs;
+use library::util::VersionMismatch;
 use pyrefly::commands::lsp::filter_unrecognized_lsp_args;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
@@ -160,7 +161,11 @@ async fn main() -> ExitCode {
             // If you return a Result from main, and RUST_BACKTRACE=1 is set, then
             // it will print a backtrace - which is not what we want.
             eprintln!("{e:#}");
-            ExitCode::FAILURE
+            if e.is::<VersionMismatch>() {
+                ExitCode::from(VersionMismatch::EXIT_CODE)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }

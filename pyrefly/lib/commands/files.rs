@@ -30,6 +30,7 @@ use tracing::warn;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::config_finder::apply_unconfigured_resolver_if_applicable;
 use crate::commands::config_finder::default_config_finder_with_overrides;
+use crate::commands::util::VersionMismatch;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigScope;
 use crate::config::config::ConfigSource;
@@ -107,8 +108,11 @@ fn get_explicit_config(
 
 fn add_config_errors(config_finder: &ConfigFinder, errors: Vec<ConfigError>) -> anyhow::Result<()> {
     if errors.iter().any(|e| e.severity() == Severity::Error) {
-        for e in errors {
+        for e in &errors {
             e.print();
+        }
+        if errors.iter().any(ConfigError::is_version_mismatch) {
+            return Err(VersionMismatch.into());
         }
         Err(anyhow::anyhow!("Fatal configuration error"))
     } else {

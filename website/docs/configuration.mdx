@@ -787,8 +787,9 @@ extends = "pyproject.toml"
 ### `required-version`
 
 Enforces a requirement on the version of Pyrefly at runtime. Pyrefly reports a
-configuration error if its version does not satisfy the requirement. This can
-keep local CLI runs, editor integrations, and CI on compatible versions.
+configuration error if its version does not satisfy the requirement. When this
+error stops `pyrefly check`, it exits with code 4. This can keep local CLI runs,
+editor integrations, and CI on compatible versions.
 
 ```toml
 # pyrefly.toml
