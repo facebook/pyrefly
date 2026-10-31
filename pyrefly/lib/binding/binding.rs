@@ -128,7 +128,7 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 12);
+assert_words!(BindingExpect, 13);
 assert_words!(BindingTypeAlias, 6);
 assert_words!(BindingAnnotation, 11);
 assert_words!(BindingClass, 11);
@@ -1318,6 +1318,11 @@ pub enum BindingExpect {
         subject_idx: Idx<Key>,
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
+        /// Narrow ops of preceding unguarded cases in the same match, in
+        /// source order. Lets the reachability check detect sibling
+        /// subsumption (a class already matched above), which subject
+        /// narrowing alone cannot see for `Any` subjects.
+        prev_case_ops: Vec<(Box<NarrowOp>, TextRange)>,
         case_range: TextRange,
     },
     /// Code following one or more points in a suite that control passes only conditionally, such
