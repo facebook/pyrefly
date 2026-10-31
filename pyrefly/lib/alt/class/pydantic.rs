@@ -1029,6 +1029,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     {
                         continue;
                     }
+                    if flags.pydantic_unknown_validation_alias
+                        && validation.validate_by_alias.unwrap_or(
+                            dataclass
+                                .init_defaults
+                                .pydantic_validation_flags
+                                .validate_by_alias(),
+                        )
+                    {
+                        continue;
+                    }
                     let alias = flags
                         .init_by_alias
                         .as_ref()

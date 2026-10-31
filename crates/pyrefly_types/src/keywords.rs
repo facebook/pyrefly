@@ -151,6 +151,8 @@ pub struct DataclassFieldKeywords {
     pub init_by_name: bool,
     /// If non-None, this field should have a corresponding parameter in `__init__` with the given alias.
     pub init_by_alias: Option<Name>,
+    /// A Pydantic validation alias was supplied but is not a known string.
+    pub pydantic_unknown_validation_alias: bool,
     /// Unmodeled Pydantic annotation metadata may change how raw input is validated.
     pub pydantic_unchecked_metadata: bool,
     /// gt and lt specify the range of values that the field can take. None means no constraint
@@ -190,6 +192,7 @@ impl DataclassFieldKeywords {
             kw_only: None,
             init_by_name: true,
             init_by_alias: None,
+            pydantic_unknown_validation_alias: false,
             pydantic_unchecked_metadata: false,
             lt: None,
             gt: None,

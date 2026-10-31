@@ -128,7 +128,6 @@ Plain.model_validate({"x": -1})
 );
 
 pydantic_testcase!(
-    bug = "Unsupported validation aliases are confused with absent aliases",
     test_model_validate_unsupported_validation_aliases,
     r#"
 from typing import Annotated
@@ -137,24 +136,24 @@ from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 class Choice(BaseModel):
     x: int = Field(ge=0, validation_alias=AliasChoices("y", "x"))
 
-Choice.model_validate({"y": 1, "x": -1})  # E: violates Pydantic `ge` constraint
+Choice.model_validate({"y": 1, "x": -1})
 Choice.model_validate({"y": 1, "x": -1}, by_alias=False, by_name=True)  # E: violates Pydantic `ge` constraint
 
 class Fallback(BaseModel):
     x: int = Field(ge=0, alias="z", validation_alias=AliasChoices("y", "z"))
 
-Fallback.model_validate({"y": 1, "z": -1})  # E: violates Pydantic `ge` constraint
+Fallback.model_validate({"y": 1, "z": -1})
 
 class Path(BaseModel):
     model_config = ConfigDict(validate_by_name=True)
     x: int = Field(ge=0, validation_alias=AliasPath("values", 0))
 
-Path.model_validate({"values": [1], "x": -1})  # E: violates Pydantic `ge` constraint
+Path.model_validate({"values": [1], "x": -1})
 
 class AnnotatedChoice(BaseModel):
     x: Annotated[int, Field(ge=0, validation_alias=AliasChoices("y", "x"))]
 
-AnnotatedChoice.model_validate({"y": 1, "x": -1})  # E: violates Pydantic `ge` constraint
+AnnotatedChoice.model_validate({"y": 1, "x": -1})
 
 class StringAlias(BaseModel):
     x: int = Field(ge=0, validation_alias="y")

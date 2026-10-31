@@ -40,6 +40,7 @@ use crate::binding::pydantic::LE;
 use crate::binding::pydantic::LT;
 use crate::binding::pydantic::MODEL_CONSTRUCT;
 use crate::binding::pydantic::STRICT;
+use crate::binding::pydantic::VALIDATION_ALIAS;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
@@ -858,6 +859,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let mut kw_only = map.get_bool(&DataclassFieldKeywords::KW_ONLY);
 
+        let effective_alias_keyword = if map.is_set(alias_keyword) {
+            alias_keyword
+        } else {
+            &DataclassFieldKeywords::ALIAS
+        };
+        let pydantic_unknown_validation_alias = alias_keyword == &VALIDATION_ALIAS
+            && ((map.is_set(effective_alias_keyword)
+                && map.get_string(effective_alias_keyword).is_none())
+                || args.keywords.iter().any(|kw| kw.arg.is_none()));
         let mut alias = if dataclass_metadata.init_defaults.init_by_alias {
             map.get_string(alias_keyword)
                 .or_else(|| map.get_string(&DataclassFieldKeywords::ALIAS))
@@ -925,6 +935,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             kw_only,
             init_by_name: dataclass_metadata.init_defaults.init_by_name || alias.is_none(),
             init_by_alias: alias,
+            pydantic_unknown_validation_alias,
             pydantic_unchecked_metadata: false,
             lt,
             gt,

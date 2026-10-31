@@ -1815,6 +1815,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .map(|flags| DataclassFieldKeywords {
                         default: flags.default,
                         strict: flags.strict,
+                        pydantic_unknown_validation_alias: flags.pydantic_unknown_validation_alias,
                         pydantic_unchecked_metadata: flags.pydantic_unchecked_metadata,
                         ..DataclassFieldKeywords::new()
                     });
@@ -1881,6 +1882,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .take()
                             .or_else(|| annotation_flags.default.clone());
                         f.strict = f.strict.or(annotation_flags.strict);
+                        f.pydantic_unknown_validation_alias |=
+                            annotation_flags.pydantic_unknown_validation_alias;
                         f.pydantic_unchecked_metadata |=
                             annotation_flags.pydantic_unchecked_metadata;
                     }
