@@ -240,41 +240,37 @@ impl ImportUsageVisitor<'_> {
         }
     }
 
-    // Module-valued exports are not attributes of the module they import. Read only
-    // cached export types: import-only modules retain Answers rather than Solutions.
-    fn named_import_refers_to_target(&self, base: ModuleName, name: &Name) -> bool {
-        let matches_module = |ty: &Type| {
-            let matches = |ty: &Type| {
-                matches!(ty, Type::Module(module)
-                    if module_matches_target(ModuleName::from_parts(module.parts()), self.target_module)
-                        || module.imported_modules().any(|name| module_matches_target(name, self.target_module)))
-            };
-            match ty {
-                Type::Union(union) => union.members.iter().any(matches),
-                _ => matches(ty),
-            }
+    /// Compare cached module-valued exports before resolving named attributes.
+    /// Import-only modules retain Answers rather than finalized Solutions.
+    fn named_import_refers_to_target(
+        &self,
+        base: ModuleName,
+        base_handle: Option<&Handle>,
+        name: &Name,
+    ) -> bool {
+        let matches = |ty: &Type| {
+            matches!(ty, Type::Module(module)
+                if module_matches_target(ModuleName::from_parts(module.parts()), self.target_module)
+                    || module.imported_modules().any(|name| module_matches_target(name, self.target_module)))
         };
-        let module_export = self
-            .transaction
-            .import_handle(self.importer, base, None)
-            .finding()
-            .is_some_and(|handle| {
-                let key = KeyExport(name.clone());
-                let key = Hashed::new(&key);
-                match self.transaction.get_solutions(&handle) {
-                    Some(solutions) => solutions.get_hashed_opt(key).is_some_and(matches_module),
-                    None => self
-                        .transaction
-                        .get_answers(&handle)
-                        .is_some_and(|answers| {
-                            answers
-                                .bindings()
-                                .key_to_idx_hashed_opt(key)
-                                .and_then(|idx| answers.get_idx(idx))
-                                .is_some_and(matches_module)
-                        }),
-                }
-            });
+        let matches_module = |ty: &Type| match ty {
+            Type::Union(union) => union.members.iter().any(matches),
+            _ => matches(ty),
+        };
+        let module_export = base_handle.is_some_and(|handle| {
+            let key = KeyExport(name.clone());
+            let key = Hashed::new(&key);
+            match self.transaction.get_solutions(handle) {
+                Some(solutions) => solutions.get_hashed_opt(key).is_some_and(matches_module),
+                None => self.transaction.get_answers(handle).is_some_and(|answers| {
+                    answers
+                        .bindings()
+                        .key_to_idx_hashed_opt(key)
+                        .and_then(|idx| answers.get_idx(idx))
+                        .is_some_and(matches_module)
+                }),
+            }
+        });
         module_export
             || self
                 .transaction
@@ -296,8 +292,22 @@ impl ImportUsageVisitor<'_> {
         if self.record_import(base, import_from.range()) {
             return;
         }
+        let base_handle = self
+            .transaction
+            .import_handle(self.importer, base, None)
+            .finding();
         for alias in &import_from.names {
-            if self.named_import_refers_to_target(base, &alias.name.id) {
+            let refers_to_target = if alias.name.id.as_str() == "*" {
+                base_handle.as_ref().is_some_and(|handle| {
+                    self.transaction
+                        .get_wildcard_exports(handle)
+                        .iter()
+                        .any(|name| self.named_import_refers_to_target(base, Some(handle), name))
+                })
+            } else {
+                self.named_import_refers_to_target(base, base_handle.as_ref(), &alias.name.id)
+            };
+            if refers_to_target {
                 self.ranges.push(import_from.range());
                 return;
             }

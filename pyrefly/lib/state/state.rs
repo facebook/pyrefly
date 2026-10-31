@@ -2751,6 +2751,13 @@ impl<'a> Transaction<'a> {
             .exports(&self.lookup(module_data))
     }
 
+    /// Names available through a wildcard import, respecting the module's `__all__`.
+    pub(crate) fn get_wildcard_exports(&self, handle: &Handle) -> Arc<SmallSet<Name>> {
+        let module_data = self.get_module(handle);
+        self.lookup_export(module_data)
+            .wildcard(&self.lookup(module_data))
+    }
+
     pub(crate) fn builtin_module_for_name(
         &self,
         handle: &Handle,

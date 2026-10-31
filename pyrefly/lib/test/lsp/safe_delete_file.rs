@@ -240,7 +240,6 @@ fn test_safe_delete_file_import_only_module_reexports() {
     }
 }
 
-// TODO: Wildcard re-exports currently omit the consumer's import.
 #[test]
 fn test_safe_delete_file_wildcard_reexports() {
     for bridge in [
@@ -263,7 +262,7 @@ fn test_safe_delete_file_wildcard_reexports() {
             ],
             "target",
         );
-        assert_eq!(paths, ["bridge.py"]);
+        assert_eq!(paths, ["bridge.py", "consumer.py"]);
     }
 }
 
