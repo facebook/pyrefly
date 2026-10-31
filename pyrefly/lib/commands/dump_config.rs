@@ -78,8 +78,7 @@ pub struct DumpConfigArgs {
     /// config(s) to print. Pass "all" to output all files.
     #[arg(long, default_value_t = MaxFiles::Count(10))]
     max_files: MaxFiles,
-    /// Print every resolved configuration setting, not just the interpreter
-    /// and the paths imports are resolved from.
+    /// Print additional configuration settings as TOML.
     #[arg(long)]
     full: bool,
     #[command(flatten)]
@@ -154,8 +153,9 @@ fn dump_config(
         }
         println!("  Using interpreter: {}", config.interpreters);
         if full {
-            for line in config.structured_settings() {
-                println!("  {line}");
+            println!("  Configuration settings (TOML):");
+            for line in config.remaining_settings()?.lines() {
+                println!("    {line}");
             }
         }
         println!("  Covered files:");

@@ -59,6 +59,8 @@ use serde::de::DeserializeOwned;
 use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use toml::Table;
+use toml::Value;
 use tracing::debug;
 use tracing::error;
 
@@ -984,254 +986,39 @@ impl ConfigFile {
         result
     }
 
-    /// Render every user-facing setting as `label: value` lines for
-    /// `dump-config --full`, indented relative to the caller's own indentation.
-    ///
-    /// This omits what `dump-config` already prints — the config source, the
-    /// interpreter, the covered files, and everything reported by
-    /// `structured_import_lookup_path` — so that `--full` adds information
-    /// rather than repeating it.
-    pub fn structured_settings(&self) -> Vec<String> {
-        fn value<T: Display>(value: &Option<T>) -> Option<String> {
-            value.as_ref().map(T::to_string)
-        }
-
-        fn path(value: &Option<PathBuf>) -> Option<String> {
-            value.as_ref().map(|p| p.display().to_string())
-        }
-
-        // Render an enum by its config-file spelling (`skip-and-infer-return-any`)
-        // rather than its Rust variant name, so that it matches what a user writes.
-        fn variant<T: ValueEnum>(value: &Option<T>) -> Option<String> {
-            value.as_ref().map(|v| {
-                v.to_possible_value()
-                    .expect("config enums do not skip variants")
-                    .get_name()
-                    .to_owned()
-            })
-        }
-
-        fn list<T: Display>(values: impl IntoIterator<Item = T>) -> String {
-            format!("[{}]", values.into_iter().join(", "))
-        }
-
-        fn or_unset(value: Option<String>) -> String {
-            value.unwrap_or_else(|| "(unset)".to_owned())
-        }
-
-        // Every setting a `ConfigBase` carries, labelled by its config-file key so
-        // that it can be matched against what the user wrote. A `None` value means
-        // the setting is unspecified, which for a sub-config means "not overridden".
-        fn base_settings(base: &ConfigBase) -> Vec<(&'static str, Option<String>)> {
-            vec![
-                (
-                    "check-unannotated-defs",
-                    value(&base.check_unannotated_defs),
+    /// Serialize settings not covered by the interpreter and import-path output.
+    /// Unset options and defaults omitted by config serialization are not included.
+    pub fn remaining_settings(&self) -> Result<String> {
+        // Error severities use a HashMap, including inside sub-configs. Sort all
+        // tables for stable output while preserving the order of array elements.
+        fn sort_tables(value: Value) -> Value {
+            match value {
+                Value::Table(table) => Value::Table(
+                    table
+                        .into_iter()
+                        .sorted_by(|(a, _), (b, _)| a.cmp(b))
+                        .map(|(key, value)| (key, sort_tables(value)))
+                        .collect(),
                 ),
-                ("infer-return-types", variant(&base.infer_return_types)),
-                ("infer-with-first-use", value(&base.infer_with_first_use)),
-                ("check-all-matches", value(&base.check_all_matches)),
-                (
-                    "strict-callable-subtyping",
-                    value(&base.strict_callable_subtyping),
-                ),
-                (
-                    "strict-partial-subtyping",
-                    value(&base.strict_partial_subtyping),
-                ),
-                (
-                    "spec-compliant-overloads",
-                    value(&base.spec_compliant_overloads),
-                ),
-                (
-                    "legacy-overload-expansion",
-                    value(&base.legacy_overload_expansion),
-                ),
-                (
-                    "treat-all-caps-as-final",
-                    value(&base.treat_all_caps_as_final),
-                ),
-                (
-                    "disable-type-errors-in-ide",
-                    value(&base.disable_type_errors_in_ide),
-                ),
-                (
-                    "ignore-errors-in-generated-code",
-                    value(&base.ignore_errors_in_generated_code),
-                ),
-                ("permissive-ignores", value(&base.permissive_ignores)),
-                (
-                    "enabled-ignores",
-                    base.enabled_ignores.as_ref().map(|tools| {
-                        list(tools.iter().map(|t| {
-                            t.to_possible_value()
-                                .expect("Tool does not skip variants")
-                                .get_name()
-                                .to_owned()
-                        }))
-                    }),
-                ),
-                (
-                    "replace-imports-with-any",
-                    base.replace_imports_with_any.as_ref().map(list),
-                ),
-                (
-                    "ignore-missing-imports",
-                    base.ignore_missing_imports.as_ref().map(list),
-                ),
-                ("recursion-depth-limit", value(&base.recursion_depth_limit)),
-                (
-                    "recursion-overflow-handler",
-                    variant(&base.recursion_overflow_handler),
-                ),
-                (
-                    "untyped-def-behavior (deprecated)",
-                    variant(&base.untyped_def_behavior),
-                ),
-                (
-                    "pytorch-efficiency-lints (deprecated)",
-                    value(&base.pytorch_efficiency_lints),
-                ),
-            ]
-        }
-
-        let mut lines = vec![
-            format!(
-                "Required version: {}",
-                or_unset(value(&self.required_version))
-            ),
-            "Project files:".to_owned(),
-            format!("  Includes: {}", self.project_includes),
-            format!("  Excludes: {}", self.project_excludes),
-            format!(
-                "  Excludes heuristics disabled: {}",
-                self.disable_project_excludes_heuristics
-            ),
-            format!("  Respecting ignore files: {}", self.use_ignore_files),
-            format!(
-                "  Extra file extensions: {}",
-                list(&self.extra_file_extensions)
-            ),
-            "Python environment:".to_owned(),
-            format!(
-                "  Version: {}",
-                or_unset(value(&self.python_environment.python_version))
-            ),
-            format!(
-                "  Platform: {}",
-                or_unset(value(&self.python_environment.python_platform))
-            ),
-            "Import settings:".to_owned(),
-            format!(
-                "  Search path heuristics disabled: {}",
-                self.disable_search_path_heuristics
-            ),
-            format!(
-                "  Fallback search path enabled: {}",
-                self.enable_fallback_search_path
-            ),
-            format!("  Typeshed path: {}", or_unset(path(&self.typeshed_path))),
-            "Reporting:".to_owned(),
-            format!(
-                "  Output format: {}",
-                or_unset(variant(&self.output_format))
-            ),
-            format!(
-                "  Minimum severity: {}",
-                or_unset(variant(&self.min_severity))
-            ),
-            format!("  Baseline: {}", or_unset(path(&self.baseline))),
-            format!(
-                "  Baseline error level: {}",
-                or_unset(variant(&self.baseline_error_level))
-            ),
-            format!(
-                "  Skip LSP config indexing: {}",
-                self.skip_lsp_config_indexing
-            ),
-            "Type checking:".to_owned(),
-            format!("  Preset: {}", or_unset(variant(&self.preset))),
-        ];
-        lines.extend(
-            base_settings(&self.root)
-                .into_iter()
-                .map(|(key, setting)| format!("  {key}: {}", or_unset(setting))),
-        );
-
-        // `ErrorDisplayConfig` is backed by a `HashMap`, so sort to keep the output
-        // stable from run to run.
-        let errors = self
-            .root
-            .errors
-            .iter()
-            .flat_map(|errors| errors.iter())
-            .map(|(kind, severity)| (kind.to_name(), severity))
-            .sorted();
-        lines.push("Error severity overrides:".to_owned());
-        lines.extend(errors.map(|(kind, severity)| {
-            format!(
-                "  {kind}: {}",
-                severity
-                    .to_possible_value()
-                    .expect("Severity does not skip variants")
-                    .get_name()
-            )
-        }));
-
-        lines.push("Path-scoped overrides:".to_owned());
-        for sub in &self.sub_configs {
-            lines.push(format!("  Matching `{}`:", sub.matches));
-            lines.extend(
-                base_settings(&sub.settings)
-                    .into_iter()
-                    .filter_map(|(key, setting)| {
-                        setting.map(|setting| format!("    {key}: {setting}"))
-                    }),
-            );
-        }
-
-        lines.push("Coverage overrides:".to_owned());
-        lines.push(format!(
-            "  Includes: {}",
-            or_unset(value(&self.coverage.includes))
-        ));
-        lines.push(format!(
-            "  Excludes: {}",
-            or_unset(value(&self.coverage.excludes))
-        ));
-
-        lines.push("Build system:".to_owned());
-        match &self.build_system {
-            None => lines.push("  (none)".to_owned()),
-            Some(build_system) => {
-                lines.push(format!("  Args: {}", build_system.args));
-                lines.push(format!(
-                    "  Ignore if missing: {}",
-                    build_system.ignore_if_build_system_missing
-                ));
-                lines.push(format!(
-                    "  Search path prefix: {}",
-                    list(build_system.search_path_prefix.iter().map(|p| p.display()))
-                ));
-                lines.push(format!(
-                    "  Catch-all targets: {}",
-                    list(&build_system.catch_all_targets)
-                ));
-                lines.push(format!(
-                    "  Catch-all targets only: {}",
-                    build_system.catch_all_targets_only
-                ));
+                Value::Array(values) => Value::Array(values.into_iter().map(sort_tables).collect()),
+                value => value,
             }
         }
 
-        // Unrecognized keys are silently ignored when a config is parsed, so
-        // surfacing them here is often the fastest way to spot a typo.
-        lines.push(format!(
-            "Unrecognized config keys: {}",
-            list(self.root.extras.0.keys())
-        ));
-
-        lines
+        let mut settings = Table::try_from(self).context("Failed to serialize config to TOML")?;
+        for key in [
+            "python-interpreter-path",
+            "fallback-python-interpreter-name",
+            "python-interpreter-find-command",
+            "conda-environment",
+            "skip-interpreter-query",
+            "search-path",
+            "site-package-path",
+        ] {
+            settings.remove(key);
+        }
+        toml::to_string_pretty(&sort_tables(Value::Table(settings)))
+            .context("Failed to serialize remaining config settings to TOML")
     }
 
     pub fn get_sys_info(&self) -> SysInfo {
@@ -2229,8 +2016,6 @@ mod tests {
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
     use tempfile::TempDir;
-    use toml::Table;
-    use toml::Value;
 
     use super::*;
     use crate::base::ExtraConfigs;
@@ -2240,6 +2025,105 @@ mod tests {
     use crate::error_kind::Severity;
     use crate::module_wildcard::ModuleWildcard;
     use crate::util::ConfigOrigin;
+
+    #[test]
+    fn test_remaining_settings() {
+        let config: ConfigFile = toml::from_str(
+            r#"
+            python-interpreter-path = "python"
+            fallback-python-interpreter-name = "python3"
+            python-interpreter-find-command = ["find-python"]
+            conda-environment = "test"
+            skip-interpreter-query = true
+            search-path = ["src"]
+            site-package-path = ["packages"]
+            use-ignore-files = false
+            replace-imports-with-any = ["vendor.*", "!vendor.safe"]
+            not-a-real-key = "quoted \"value\"\nnext line"
+
+            [errors]
+            missing-import = "warn"
+            bad-assignment = "error"
+
+            [coverage]
+            includes = ["src/**"]
+
+            [[sub-config]]
+            matches = "src/**"
+            check-unannotated-defs = false
+
+            [sub-config.errors]
+            missing-import = "ignore"
+            bad-assignment = "warn"
+
+            [[sub-config]]
+            matches = "tests/**"
+            check-unannotated-defs = true
+            "#,
+        )
+        .unwrap();
+        let settings: Table = toml::from_str(&config.remaining_settings().unwrap()).unwrap();
+        for key in [
+            "python-interpreter-path",
+            "fallback-python-interpreter-name",
+            "python-interpreter-find-command",
+            "conda-environment",
+            "skip-interpreter-query",
+            "search-path",
+            "site-package-path",
+        ] {
+            assert!(!settings.contains_key(key), "{key} is already printed");
+        }
+        assert_eq!(settings["use-ignore-files"].as_bool(), Some(false));
+        assert_eq!(
+            settings["not-a-real-key"].as_str(),
+            Some("quoted \"value\"\nnext line")
+        );
+        assert_eq!(
+            settings["replace-imports-with-any"],
+            Value::try_from(["vendor.*", "!vendor.safe"]).unwrap()
+        );
+        assert_eq!(
+            settings["coverage"]["includes"],
+            Value::try_from(["src/**/*"]).unwrap()
+        );
+        let overrides = settings["sub-config"].as_array().unwrap();
+        assert_eq!(overrides.len(), 2);
+        assert_eq!(overrides[0]["matches"].as_str(), Some("src/**/*"));
+        assert_eq!(overrides[1]["matches"].as_str(), Some("tests/**/*"));
+        assert_eq!(
+            overrides[0]["check-unannotated-defs"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(overrides[1]["check-unannotated-defs"].as_bool(), Some(true));
+        for (errors, severities) in [
+            (&settings["errors"], ["error", "warn"]),
+            (&overrides[0]["errors"], ["warn", "ignore"]),
+        ] {
+            assert_eq!(
+                errors.as_table().unwrap().keys().collect::<Vec<_>>(),
+                ["bad-assignment", "missing-import"]
+            );
+            assert_eq!(errors["bad-assignment"].as_str(), Some(severities[0]));
+            assert_eq!(errors["missing-import"].as_str(), Some(severities[1]));
+        }
+    }
+
+    #[test]
+    fn test_remaining_settings_resolved_defaults() {
+        let mut config = ConfigFile::default();
+        config.interpreters.skip_interpreter_query = true;
+        config.root.check_unannotated_defs = Some(false);
+        assert!(config.configure().is_empty());
+
+        let settings: Table = toml::from_str(&config.remaining_settings().unwrap()).unwrap();
+        assert_eq!(settings["check-unannotated-defs"].as_bool(), Some(false));
+        assert_eq!(settings["infer-return-types"].as_str(), Some("checked"));
+        assert!(settings.contains_key("python-version"));
+        assert!(!settings.contains_key("required-version"));
+        assert!(!settings.contains_key("disable-search-path-heuristics"));
+        assert!(!settings.contains_key("use-ignore-files"));
+    }
 
     #[test]
     fn deserialize_pyrefly_config() {
