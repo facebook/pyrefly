@@ -153,6 +153,7 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// written to the shared answer cache.
     fn check_shortcut(
         _answers: &AnswersSolver<Ans>,
+        _idx: Idx<Self>,
         _binding: &Self::Value,
     ) -> Option<Self::Answer> {
         None
@@ -188,7 +189,11 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
         answer.map_ty(|ty| answers.record_recursive(ty, recursive))
     }
 
-    fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<TypeInfo> {
+    fn check_shortcut(
+        answers: &AnswersSolver<Ans>,
+        _idx: Idx<Self>,
+        binding: &Binding,
+    ) -> Option<TypeInfo> {
         match binding {
             Binding::ForwardToFirstUse(fwd) => {
                 let def_idx = answers.def_idx_for_forward_to_first_use(*fwd)?;

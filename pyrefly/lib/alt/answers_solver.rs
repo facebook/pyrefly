@@ -2521,7 +2521,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // return the raw type without caching it in shared Answers and without
         // triggering cycle detection against the NameAssign's CalcStack frame.
         let binding = self.bindings().get(idx);
-        if let Some(answer) = K::check_shortcut(self, binding) {
+        if let Some(answer) = K::check_shortcut(self, idx, binding) {
             return (
                 self.answer_scope
                     .hold_temporary::<K>(AnswerBox::new(answer)),
