@@ -20,7 +20,8 @@ use ruff_text_size::TextSize;
 use crate::config::error_kind::ErrorKind;
 use crate::module::module_info::ModuleInfo;
 use crate::state::ide::import_regular_import_edit;
-use crate::state::ide::insert_import_edit_with_forced_import_format;
+use crate::state::ide::insert_from_import_edit;
+use crate::state::ide::insert_import_edit;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
@@ -847,13 +848,7 @@ fn import_edits_with_non_future_imports() {
         let (ast, errors, _) = Ast::parse(&source, PySourceType::Python);
         assert!(errors.is_empty(), "{source}: {errors:?}");
         let (position, _, _) = import_regular_import_edit(&ast, handles["my_module"].clone(), None);
-        let from_edit = insert_import_edit_with_forced_import_format(
-            &ast,
-            handles["main"].clone(),
-            handles["my_module"].clone(),
-            "x",
-            true,
-        );
+        let from_edit = insert_from_import_edit(&ast, handles["my_module"].module(), "x");
         assert_eq!(position.to_usize(), docstring.len());
         assert_eq!(from_edit.range.start().to_usize(), docstring.len());
     }
@@ -895,13 +890,7 @@ fn import_edits_with_future_imports() {
             import_regular_import_edit(&ast, handles["my_module"].clone(), None);
         let (alias_position, alias_text, _) =
             import_regular_import_edit(&ast, handles["my_module"].clone(), Some("m"));
-        let from_edit = insert_import_edit_with_forced_import_format(
-            &ast,
-            handles["main"].clone(),
-            handles["my_module"].clone(),
-            "x",
-            true,
-        );
+        let from_edit = insert_from_import_edit(&ast, handles["my_module"].module(), "x");
         for (position, text) in [
             (position, text),
             (alias_position, alias_text),
@@ -1175,6 +1164,26 @@ fn insertion_test_implicit_import() {
                 .any(|(title, _)| title.starts_with("Insert import:"))
         );
     }
+}
+#[test]
+fn insertion_test_module_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("my_module", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_module\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+import my_module
+my_module
+# ^"#
+        ),
+        "{report}",
+    );
 }
 
 #[test]
@@ -2211,6 +2220,27 @@ x: int = "hello"  # pyrefly: ignore[bad-assignment, bad-return]
 }
 
 #[test]
+fn insertion_test_named_import_after_future_import() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("a", "my_export = 3\n"),
+            ("b", "from __future__ import annotations\nmy_export\n# ^"),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains(
+            r#"## After:
+from __future__ import annotations
+from a import my_export
+my_export
+# ^"#
+        ),
+        "{report}",
+    );
+}
+
+#[test]
 fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -2446,6 +2476,84 @@ my_export
 }
 
 #[test]
+fn insertion_test_preserves_distinct_merge_choices() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("a", "marker = 1\nclass Thing: pass\n"),
+            ("b", "marker = 2\nclass Thing: pass\n"),
+            (
+                "main",
+                "from a import marker\nfrom b import marker\nThing()\n# ^",
+            ),
+        ],
+        get_test_report,
+    );
+    for module in ["a", "b"] {
+        assert!(
+            report.contains(&format!(
+                "# Title: Insert import: `from {module} import Thing`"
+            )),
+            "{report}"
+        );
+        assert!(
+            report.contains(&format!("from {module} import marker, Thing\n")),
+            "{report}"
+        );
+    }
+}
+
+#[test]
+fn insertion_test_import_merge_styles() {
+    for (input, expected) in [
+        (
+            "from a import marker as m\n",
+            "from a import marker as m, Foo\n",
+        ),
+        (
+            "from a import (\n    marker,\n)\n",
+            "from a import (\n    marker, Foo,\n)\n",
+        ),
+        (
+            "from a import Foo as Alias\n",
+            "from a import Foo as Alias, Foo\n",
+        ),
+        (
+            "from a import marker as Foo\n",
+            "from a import Foo\nfrom a import marker as Foo\n",
+        ),
+        (
+            "from a import marker\nfrom a import Foo\n",
+            "from a import marker\nfrom a import Foo\n",
+        ),
+        ("from a import Foo as Foo\n", "from a import Foo as Foo\n"),
+        ("from a import *\n", "from a import Foo\nfrom a import *\n"),
+        ("from a import marker\r\n", "from a import marker, Foo\r\n"),
+    ] {
+        let (handles, state) = mk_multi_file_state_assert_no_errors(
+            &[("a", "marker = 1\nclass Foo: pass\n"), ("b", input)],
+            Require::Exports,
+        );
+        let transaction = state.transaction();
+        let target = handles.get("b").unwrap();
+        let ast = transaction.get_ast(target).unwrap();
+        let edit = insert_import_edit(
+            &ast,
+            state.config_finder(),
+            target.clone(),
+            handles.get("a").unwrap().clone(),
+            "Foo",
+            ImportFormat::Absolute,
+        );
+        let mut actual = input.to_owned();
+        actual.replace_range(
+            edit.range.start().to_usize()..edit.range.end().to_usize(),
+            &edit.insert_text,
+        );
+        assert_eq!(actual, expected, "input: {input:?}");
+    }
+}
+
+#[test]
 fn insertion_test_duplicate_imports() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[
@@ -2454,8 +2562,7 @@ fn insertion_test_duplicate_imports() {
         ],
         get_test_report,
     );
-    // The insertion won't attempt to merge imports from the same module.
-    // It's not illegal, but it would be nice if we do merge.
+    // Merge with existing imports from the same module when possible.
     assert_eq!(
         r#"
 # a.py
@@ -2471,8 +2578,7 @@ from a import another_thing
 my_export
 # ^
 ## After:
-from a import my_export
-from a import another_thing
+from a import another_thing, my_export
 my_export
 # ^
 # Title: Generate variable `my_export`

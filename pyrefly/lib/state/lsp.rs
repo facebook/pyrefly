@@ -987,7 +987,7 @@ impl<'a> Transaction<'a> {
         );
         // Return the whole edit so callers can use `display_text` for human-facing
         // strings (which stays "from parent import submodule" even when the actual
-        // edit merges into an existing line and `new_text` is just ", submodule").
+        // edit merges into an existing line and `insert_text` is just ", submodule").
         Some((submodule_name.to_owned(), import_edit))
     }
 
@@ -3940,9 +3940,10 @@ impl<'a> Transaction<'a> {
 
         import_actions.sort();
 
-        // Keep only the first suggestion for each unique import text (after sorting,
-        // this will be the public/non-deprecated version)
-        import_actions.dedup_by(|a, b| a.insert_text == b.insert_text);
+        // Identical suffixes at different insertion points are distinct choices.
+        import_actions.dedup_by(|a, b| {
+            a.module_info == b.module_info && a.range == b.range && a.insert_text == b.insert_text
+        });
 
         // Wrap single-edit actions in the same shape as the multi-edit producers.
         fn wrap_single(

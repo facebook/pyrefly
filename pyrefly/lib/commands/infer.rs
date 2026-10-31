@@ -21,7 +21,9 @@ use pyrefly_util::includes::Includes;
 use pyrefly_util::thread_pool::ThreadCount;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::helpers::is_docstring_stmt;
+use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::annotation::format_annotation;
@@ -29,7 +31,11 @@ use crate::commands::check::Handles;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::export::definitions::DefinitionStyle;
+use crate::export::definitions::Definitions;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
+use crate::state::ide::ImportEdit;
+use crate::state::ide::insert_from_import_edit;
 use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -38,15 +44,6 @@ use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
-
-/// Check if a statement is a `from __future__ import ...` statement.
-/// New imports must be inserted after `__future__` imports to produce valid Python.
-fn is_future_import_stmt(stmt: &Stmt) -> bool {
-    matches!(
-        stmt,
-        Stmt::ImportFrom(import_from) if import_from.module.as_ref().is_some_and(|m| m.id == "__future__")
-    )
-}
 
 #[deny(clippy::missing_docs_in_private_items)]
 /// Flags for controlling the behavior of the autotype command
@@ -180,6 +177,13 @@ fn importable_name_for_qname(qname: &QName) -> String {
     unreachable!("NestingContext chain should always end with Toplevel")
 }
 
+/// Whether an annotation can reuse a binding, needs an import, or is unsafe.
+enum AnnotationImport {
+    Existing,
+    Insert,
+    Unavailable,
+}
+
 /// Formats inlay hints as annotation strings and collects the set of imports
 /// needed for the types that pass filtering. Returns the formatted annotations
 /// and a set of `(source_module, importable_name)` pairs to import.
@@ -189,6 +193,7 @@ fn format_hints(
     enum_members: &dyn Fn(&Class) -> Option<usize>,
     heap: &TypeHeap,
     current_module_name: ModuleName,
+    plan_import: &dyn Fn(ModuleName, &str) -> AnnotationImport,
 ) -> (
     Vec<(ruff_text_size::TextSize, String)>,
     HashSet<(ModuleName, String)>,
@@ -256,13 +261,27 @@ fn format_hints(
         if !is_container && kind == AnnotationKind::Variable {
             continue;
         }
-        needed_imports.extend(
+        hint_imports.extend(
             typing_imports
                 .into_iter()
                 .map(|name| (ModuleName::typing(), name.to_owned())),
         );
-        // Only record imports for types that pass all filters above
-        needed_imports.extend(hint_imports);
+        let mut imports = Vec::new();
+        let mut safe = true;
+        for (module, name) in hint_imports {
+            match plan_import(module, &name) {
+                AnnotationImport::Existing => {}
+                AnnotationImport::Insert => imports.push((module, name)),
+                AnnotationImport::Unavailable => {
+                    safe = false;
+                    break;
+                }
+            }
+        }
+        if !safe {
+            continue;
+        }
+        needed_imports.extend(imports);
         match kind {
             AnnotationKind::Parameter => {
                 qualified_hints.push((position, format!(": {formatted_hint}")));
@@ -276,15 +295,6 @@ fn format_hints(
         }
     }
     (qualified_hints, needed_imports)
-}
-
-// Sort the hints by reverse order so we don't have to recalculate positions
-fn sort_inlay_hints(
-    inlay_hints: Vec<(ruff_text_size::TextSize, String)>,
-) -> Vec<(ruff_text_size::TextSize, String)> {
-    let mut sorted_inlay_hints = inlay_hints;
-    sorted_inlay_hints.sort_by(|(a, _), (b, _)| b.cmp(a));
-    sorted_inlay_hints
 }
 
 fn hint_to_string(
@@ -355,6 +365,28 @@ impl InferArgs {
         transaction.run(&handles, Require::Everything, None);
         let mut any_changes = false;
         for handle in handles {
+            let Some(ast) = transaction.get_ast(&handle) else {
+                continue;
+            };
+            let definitions = Definitions::new(
+                &ast.body,
+                handle.module(),
+                handle.path().is_init(),
+                *handle.sys_info(),
+            );
+            let postponed = ast.body.iter().any(|stmt| {
+                matches!(stmt, Stmt::ImportFrom(import)
+                    if import.level == 0
+                        && import.module.as_ref().is_some_and(|module| module.as_str() == "__future__")
+                        && import.names.iter().any(|name| name.name.as_str() == "annotations"))
+            });
+            let leading_imports_end = ast
+                .body
+                .iter()
+                .skip_while(|stmt| is_docstring_stmt(stmt))
+                .take_while(|stmt| matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)))
+                .last()
+                .map_or(TextSize::new(0), |stmt| stmt.range().end());
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
                 transaction.inferred_types(&handle, flags.return_types(), flags.containers());
@@ -371,7 +403,7 @@ impl InferArgs {
             if let Some(inferred_types) = inferred_types {
                 parameter_types.extend(inferred_types);
                 let heap = TypeHeap::new();
-                let (formatted, needed_imports) = format_hints(
+                let (annotations, needed_imports) = format_hints(
                     parameter_types,
                     &stdlib,
                     &|cls| {
@@ -388,47 +420,54 @@ impl InferArgs {
                     },
                     &heap,
                     handle.module(),
+                    &|module, name| {
+                        if let Some(definition) = definitions.definitions.get(&Name::new(name)) {
+                            if !definition.needs_anywhere
+                                && matches!(&definition.style,
+                                    DefinitionStyle::Import(source) | DefinitionStyle::ImportAsEq(source)
+                                        if *source == module)
+                                && (postponed || definition.range.end() <= leading_imports_end)
+                            {
+                                AnnotationImport::Existing
+                            } else {
+                                AnnotationImport::Unavailable
+                            }
+                        } else if transaction
+                            .import_handle(&handle, module, None)
+                            .finding()
+                            .is_some()
+                        {
+                            AnnotationImport::Insert
+                        } else {
+                            AnnotationImport::Unavailable
+                        }
+                    },
                 );
-                let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
                 // Build import edits once so dry-run and write share them.
-                let imports: Vec<(TextSize, String, String)> = if flags.imports()
-                    && !needed_imports.is_empty()
-                    && let Some(ast) = transaction.get_ast(&handle)
-                {
-                    let position = ast
-                        .body
-                        .iter()
-                        .find(|stmt| !is_docstring_stmt(stmt) && !is_future_import_stmt(stmt))
-                        .map_or(ast.range.end(), |stmt| stmt.range().start());
-                    let mut imports: Vec<(TextSize, String, String)> = needed_imports
+                let imports: Vec<ImportEdit> = if flags.imports() && !needed_imports.is_empty() {
+                    needed_imports
                         .into_iter()
                         .map(|(module_name, name)| {
-                            let import_text =
-                                format!("from {} import {}\n", module_name.as_str(), name);
-                            (position, import_text, module_name.as_str().to_owned())
+                            insert_from_import_edit(&ast, module_name, &name)
                         })
-                        .collect();
-                    imports.sort_by(|(_, a, _), (_, b, _)| a.cmp(b));
-                    imports
+                        .filter(|edit| !edit.insert_text.is_empty())
+                        .collect()
                 } else {
                     Vec::new()
                 };
                 if flags.dry_run() {
-                    if !sorted.is_empty() || !imports.is_empty() {
+                    if !annotations.is_empty() || !imports.is_empty() {
                         any_changes = true;
                         println!(
                             "{}: would add {} annotation(s) and {} import(s)",
                             file_path.display(),
-                            sorted.len(),
+                            annotations.len(),
                             imports.len()
                         );
                     }
                 } else {
-                    Self::add_annotations_to_file(file_path, sorted)?;
-                    if !imports.is_empty() {
-                        Self::add_imports_to_file(file_path, imports)?;
-                    }
+                    Self::apply_edits_to_file(file_path, annotations, imports)?;
                 }
             }
         }
@@ -439,34 +478,30 @@ impl InferArgs {
         })
     }
 
-    fn add_annotations_to_file(
+    /// Apply all edits from one AST snapshot in descending offset order.
+    fn apply_edits_to_file(
         file_path: &Path,
-        sorted: Vec<(TextSize, String)>,
+        annotations: Vec<(TextSize, String)>,
+        imports: Vec<ImportEdit>,
     ) -> anyhow::Result<()> {
-        let file_content = fs_anyhow::read_to_string(file_path)?;
-        let mut result = file_content;
-        for inlay_hint in sorted {
-            let (position, hint) = inlay_hint;
-            // Convert the TextSize to a byte offset
-            let offset = (position).into();
-            if offset <= result.len() {
-                result.insert_str(offset, &hint);
-            }
-        }
-        fs_anyhow::write(file_path, result)
-    }
-
-    fn add_imports_to_file(
-        file_path: &Path,
-        imports: Vec<(TextSize, String, String)>,
-    ) -> anyhow::Result<()> {
-        let file_content = fs_anyhow::read_to_string(file_path)?;
-        let mut result = file_content;
-        for (position, import, _) in imports {
-            let offset = (position).into();
-            if !result.contains(&import) {
-                result.insert_str(offset, &import);
-            }
+        let mut result = fs_anyhow::read_to_string(file_path)?;
+        let mut edits: Vec<(TextRange, String)> = imports
+            .into_iter()
+            .map(|edit| (edit.range, edit.insert_text))
+            .chain(
+                annotations
+                    .into_iter()
+                    .map(|(position, text)| (TextRange::empty(position), text)),
+            )
+            .collect();
+        edits.sort_by(|(range1, text1), (range2, text2)| {
+            range2
+                .start()
+                .cmp(&range1.start())
+                .then_with(|| text1.cmp(text2))
+        });
+        for (range, edit_text) in edits {
+            result.replace_range(range.start().to_usize()..range.end().to_usize(), &edit_text);
         }
         fs_anyhow::write(file_path, result)
     }
@@ -1040,8 +1075,7 @@ def callbacks():
             return ExampleA()
         "#;
         let output = r#"
-        from file_two import ExampleA
-from file_two import get_a
+        from file_two import get_a, ExampleA
         def foo() -> ExampleA:
             return get_a()
         "#;
@@ -1068,15 +1102,221 @@ from file_two import get_a
             return ExampleB()
         "#;
         let output = r#"
-        from file_two import ExampleB
-from file_two import ExampleA
-from file_two import get_a, get_b
+        from file_two import get_a, get_b, ExampleB, ExampleA
         def foo() -> ExampleA:
             return get_a()
         def bar() -> ExampleB:
             return get_b()
         "#;
         assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_preserve_existing_alias_bindings() {
+        let input = r#"from file_two import marker as Foo, make
+def foo():
+    return make()
+assert Foo == 17
+"#;
+        let dependency = r#"class Foo: pass
+marker = 17
+def make() -> Foo:
+    return Foo()
+"#;
+        assert_imports_and_annotations(input, dependency, input);
+    }
+
+    #[test]
+    fn test_imports_preserve_guarded_annotations() -> anyhow::Result<()> {
+        let tdir = tempfile::tempdir()?;
+        let path = tdir.path().join("main.py");
+        let config_path = tdir.path().join("pyrefly.toml");
+        let config_arg = config_path.display().to_string();
+        fs_anyhow::write(
+            &config_path,
+            "project_includes = [\"main.py\"]\nproject_excludes = []\n",
+        )?;
+        fs_anyhow::write(
+            &tdir.path().join("file_two.py"),
+            r#"from __future__ import annotations
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from optional_dep import ExampleA
+def get_a() -> ExampleA:
+    raise NotImplementedError
+"#,
+        )?;
+        fs_anyhow::write(
+            &tdir.path().join("optional_dep.py"),
+            "class ExampleA: pass\nraise ImportError(\"optional backend absent\")\n",
+        )?;
+        for guarded in [
+            "if TYPE_CHECKING:\n    from optional_dep import ExampleA\n",
+            "try:\n    from optional_dep import ExampleA\nexcept ImportError:\n    pass\n",
+            "value = 0\nfrom optional_dep import ExampleA\n",
+        ] {
+            let prefix = format!(
+                "from __future__ import annotations\nfrom typing import TYPE_CHECKING\nfrom file_two import get_a\n{guarded}"
+            );
+            let input = format!("{prefix}def foo():\n    return get_a()\n");
+            let expected = format!("{prefix}def foo() -> ExampleA:\n    return get_a()\n");
+            for dry_run in [false, true] {
+                fs_anyhow::write(&path, &input)?;
+                let mut args = vec!["infer", "--config", config_arg.as_str()];
+                if dry_run {
+                    args.push("--dry-run");
+                }
+                let status = InferArgs::parse_from(args).run(None, TEST_THREAD_COUNT)?;
+                assert_eq!(
+                    status,
+                    if dry_run {
+                        CommandExitStatus::UserError
+                    } else {
+                        CommandExitStatus::Success
+                    }
+                );
+                assert_str_eq!(
+                    fs_anyhow::read_to_string(&path)?,
+                    if dry_run {
+                        input.as_str()
+                    } else {
+                        expected.as_str()
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_skip_unreachable_defining_module() -> anyhow::Result<()> {
+        let tdir = tempfile::tempdir()?;
+        let nested = tdir.path().join("nested");
+        let facade = nested.join("facade");
+        let hidden = tdir.path().join("hidden");
+        fs_anyhow::create_dir_all(&facade)?;
+        fs_anyhow::create_dir_all(&hidden)?;
+        fs_anyhow::write(
+            &nested.join("pyrefly.toml"),
+            "search-path = [\".\"]\ndisable-search-path-heuristics = true\n",
+        )?;
+        fs_anyhow::write(
+            &facade.join("pyrefly.toml"),
+            "search-path = [\"../../hidden\"]\ndisable-search-path-heuristics = true\n",
+        )?;
+        fs_anyhow::write(&hidden.join("secret.py"), "class Foo: pass\n")?;
+        fs_anyhow::write(
+            &facade.join("__init__.py"),
+            "from secret import Foo as Foo\ndef make() -> Foo:\n    return Foo()\n",
+        )?;
+        let path = nested.join("main.py");
+        let path_arg = path.display().to_string();
+        let input = "from facade import make\ndef foo():\n    return make()\n";
+        for dry_run in [false, true] {
+            fs_anyhow::write(&path, input)?;
+            let mut args = vec![
+                "infer",
+                path_arg.as_str(),
+                "--parameter-types=false",
+                "--skip-interpreter-query",
+            ];
+            if dry_run {
+                args.push("--dry-run");
+            }
+            let status = InferArgs::parse_from(args).run(None, TEST_THREAD_COUNT)?;
+            assert_eq!(status, CommandExitStatus::Success);
+            assert_str_eq!(fs_anyhow::read_to_string(&path)?, input);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_imports_with_similar_names_outside_initial_block() {
+        let input = r#"import file_two
+def foo():
+    return file_two.make()
+from file_two import FooBar
+"#;
+        let dependency = r#"class Foo: pass
+class FooBar: pass
+def make() -> Foo:
+    return Foo()
+"#;
+        let expected = r#"from file_two import Foo
+import file_two
+def foo() -> Foo:
+    return file_two.make()
+from file_two import FooBar
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_do_not_duplicate_existing_names() {
+        let input = r#"from file_two import make, Foo
+def foo():
+    return make()
+"#;
+        let dependency = r#"class Foo: pass
+def make() -> Foo:
+    return Foo()
+"#;
+        let expected = r#"from file_two import make, Foo
+def foo() -> Foo:
+    return make()
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_preserve_later_import_offsets() {
+        let input = r#"def foo():
+    return 1
+from file_two import marker
+MissingClass()
+MissingClass()
+"#;
+        let dependency = "marker = 1\nclass MissingClass: pass\n";
+        let expected = r#"def foo() -> int:
+    return 1
+from file_two import marker
+MissingClass()
+MissingClass()
+"#;
+        assert_imports_and_annotations(input, dependency, expected);
+    }
+
+    #[test]
+    fn test_imports_leave_unrelated_unknown_names_unchanged() -> anyhow::Result<()> {
+        let tdir = tempfile::tempdir()?;
+        let path = tdir.path().join("test.py");
+        let config_path = tdir.path().join("pyrefly.toml");
+        let config_arg = config_path.display().to_string();
+        let input = "from dependency import marker\nMissingClass()\nMissingClass()\n";
+        fs_anyhow::write(
+            &tdir.path().join("dependency.py"),
+            "marker = 1\nclass MissingClass: pass\n",
+        )?;
+        for config in ["", "\n[errors]\nunknown-name = \"ignore\"\n"] {
+            fs_anyhow::write(
+                &config_path,
+                format!("project_includes = [\"test.py\"]\nproject_excludes = []\n{config}"),
+            )?;
+            for flags in [
+                vec![],
+                vec!["--imports=false"],
+                vec!["--dry-run"],
+                vec!["--imports=false", "--dry-run"],
+            ] {
+                fs_anyhow::write(&path, input)?;
+                let mut args = vec!["infer", "--config", config_arg.as_str()];
+                args.extend(flags);
+                let status = InferArgs::parse_from(args).run(None, TEST_THREAD_COUNT)?;
+                assert_eq!(status, CommandExitStatus::Success);
+                assert_str_eq!(fs_anyhow::read_to_string(&path)?, input);
+            }
+        }
         Ok(())
     }
 
@@ -1136,7 +1376,7 @@ class MyClass:
         // Should import from "short" (public, 1 component), not from
         // "_private.long_path" (private, 2 components).
         assert!(
-            got_file.contains("from short import MyClass"),
+            got_file.contains("from short import get_a, MyClass\n"),
             "Expected import from 'short' module, got:\n{}",
             got_file,
         );
@@ -1164,8 +1404,7 @@ def get_a():
     return ExampleA()
 "#;
         let output = r#"from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
@@ -1190,8 +1429,7 @@ def get_a():
 "#;
         let output = r#""""Module docstring."""
 from __future__ import annotations
-from file_two import ExampleA
-from file_two import get_a
+from file_two import get_a, ExampleA
 def foo() -> ExampleA:
     return get_a()
 "#;
