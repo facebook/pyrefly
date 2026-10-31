@@ -1741,6 +1741,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // If so, we can narrow the left operand to the mapping's key type.
                 if !self.behaves_like_any(&right_ty)
                     && let Some((key_ty, _)) = self.unwrap_mapping(&right_ty)
+                    // Preserve an operand already assignable to the key type, including nested Any.
+                    && !self.is_subset_eq(ty, &key_ty)
                 {
                     return self.intersect(ty, &key_ty);
                 }
