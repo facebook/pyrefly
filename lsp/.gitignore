@@ -4,3 +4,5 @@ node_modules
 *.vsix
 dist/
 bin/
+/web-test/
+.vscode-test-web/

@@ -52,7 +52,8 @@ impl State {
 
     #[wasm_bindgen(js_name=getErrors)]
     pub fn get_errors(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.get_errors()).unwrap_or(JsValue::NULL)
+        serde_wasm_bindgen::to_value(&self.0.get_errors())
+            .expect("Diagnostics contain only serializable values.")
     }
 
     #[wasm_bindgen(js_name=hover)]
@@ -74,7 +75,8 @@ impl State {
 
     #[wasm_bindgen(js_name=semanticTokensLegend)]
     pub fn semantic_tokens_legend(&mut self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.semantic_tokens_legend()).unwrap_or(JsValue::NULL)
+        serde_wasm_bindgen::to_value(&self.0.semantic_tokens_legend())
+            .expect("The semantic token legend contains only strings.")
     }
 
     #[wasm_bindgen(js_name=gotoDefinition)]
@@ -87,9 +89,27 @@ impl State {
         }
     }
 
+    #[wasm_bindgen(js_name=gotoDefinitionLocations)]
+    pub fn goto_definition_locations(&mut self, line: i32, column: i32) -> JsValue {
+        let results = self
+            .0
+            .goto_definition_locations(Position::new(line, column));
+        serde_wasm_bindgen::to_value(&results).unwrap()
+    }
+
     #[wasm_bindgen(js_name=autoComplete)]
     pub fn autocomplete(&mut self, line: i32, column: i32) -> JsValue {
         serde_wasm_bindgen::to_value(&self.0.autocomplete(Position::new(line, column))).unwrap()
+    }
+
+    #[wasm_bindgen(js_name=autoCompleteLsp)]
+    pub fn autocomplete_lsp(&self, line: i32, column: i32) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.0.autocomplete_lsp(Position::new(line, column))).unwrap()
+    }
+
+    #[wasm_bindgen(js_name=pendingImports)]
+    pub fn pending_imports(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.0.pending_imports()).unwrap()
     }
 
     #[wasm_bindgen(js_name=inlayHint)]

@@ -17,12 +17,44 @@ on:
   pull_request:
     paths:
       - 'lsp/**'
+      - 'pyrefly_wasm/**'
+      - 'pyrefly/lib/playground.rs'
+      - 'pyrefly/lib/memory_project.rs'
       - '.github/workflows/ci_extension_build.yml'
       - '.github/workflows/ci_extension_test.yml'
 
 jobs:
   build_extension:
     uses: ./.github/workflows/ci_extension_build.yml
+
+  test_web_extension:
+    runs-on: ubuntu-latest
+    needs: build_extension
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v7
+        with:
+          name: pyrefly-wasm-inputs
+          path: pyrefly_wasm/target
+      - uses: actions/download-artifact@v7
+        with:
+          name: pyrefly-web
+          path: lsp
+      - run: npm ci
+        working-directory: lsp
+      - run: npm run test:web
+        working-directory: lsp
+      - run: node tests/check-vsix.cjs pyrefly-web.vsix
+        working-directory: lsp
+      - run: unzip -q pyrefly-web.vsix -d web-test
+        working-directory: lsp
+      - run: npx playwright install --with-deps chromium
+        working-directory: lsp
+      - run: npm run test:web:host
+        working-directory: lsp
 
   test_extension:
     needs: build_extension
@@ -68,6 +100,10 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: pyrefly-${{ matrix.platform }}-${{ matrix.arch }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: pyrefly-wasm-inputs
+          path: pyrefly_wasm/target
       - name: Rename .vsix to .zip
         run: |
             mv *.vsix *.zip
