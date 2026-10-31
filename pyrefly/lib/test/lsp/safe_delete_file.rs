@@ -130,7 +130,6 @@ fn file_usage_paths_with_indexing(
     paths
 }
 
-// TODO: Non-aliased dotted module re-exports omit the consumer's import.
 #[test]
 fn test_safe_delete_file_unaliased_submodule_reexport() {
     let paths = file_usage_paths(
@@ -146,7 +145,7 @@ fn test_safe_delete_file_unaliased_submodule_reexport() {
         ],
         "pkg.target",
     );
-    assert_eq!(paths, ["bridge.py"]);
+    assert_eq!(paths, ["bridge.py", "consumer.py"]);
 }
 
 #[test]
@@ -172,7 +171,6 @@ fn test_safe_delete_file_excludes_inaccessible_submodules() {
     assert_eq!(paths, ["bridge.py", "consumer.py"]);
 }
 
-// TODO: Module-valued re-exports currently omit the consumer's import.
 #[test]
 fn test_safe_delete_file_module_reexports() {
     for (bridge, consumer) in [
@@ -197,11 +195,10 @@ fn test_safe_delete_file_module_reexports() {
             ],
             "target",
         );
-        assert_eq!(paths, ["bridge.py"]);
+        assert_eq!(paths, ["bridge.py", "consumer.py"]);
     }
 }
 
-// TODO: Aliased imports of dotted modules currently omit the consumer's import.
 #[test]
 fn test_safe_delete_file_aliased_submodule_reexport() {
     let paths = file_usage_paths(
@@ -217,10 +214,9 @@ fn test_safe_delete_file_aliased_submodule_reexport() {
         ],
         "pkg.target",
     );
-    assert_eq!(paths, ["bridge.py"]);
+    assert_eq!(paths, ["bridge.py", "consumer.py"]);
 }
 
-// TODO: Import-only bridges and optional module exports omit the consumer's import.
 #[test]
 fn test_safe_delete_file_import_only_module_reexports() {
     for bridge in [
@@ -240,6 +236,6 @@ fn test_safe_delete_file_import_only_module_reexports() {
             "target",
             false,
         );
-        assert_eq!(paths, ["bridge.py"]);
+        assert_eq!(paths, ["bridge.py", "consumer.py"]);
     }
 }

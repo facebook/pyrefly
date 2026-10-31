@@ -28,15 +28,19 @@ use pyrefly_python::module::TextRangeWithModule;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_types::types::Type;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde_json::json;
+use starlark_map::Hashed;
 
+use crate::binding::binding::KeyExport;
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::state::lsp::FindPreference;
 use crate::state::state::State;
@@ -236,6 +240,50 @@ impl ImportUsageVisitor<'_> {
         }
     }
 
+    // Module-valued exports are not attributes of the module they import. Read only
+    // cached export types: import-only modules retain Answers rather than Solutions.
+    fn named_import_refers_to_target(&self, base: ModuleName, name: &Name) -> bool {
+        let matches_module = |ty: &Type| {
+            let matches = |ty: &Type| {
+                matches!(ty, Type::Module(module)
+                    if module_matches_target(ModuleName::from_parts(module.parts()), self.target_module)
+                        || module.imported_modules().any(|name| module_matches_target(name, self.target_module)))
+            };
+            match ty {
+                Type::Union(union) => union.members.iter().any(matches),
+                _ => matches(ty),
+            }
+        };
+        let module_export = self
+            .transaction
+            .import_handle(self.importer, base, None)
+            .finding()
+            .is_some_and(|handle| {
+                let key = KeyExport(name.clone());
+                let key = Hashed::new(&key);
+                match self.transaction.get_solutions(&handle) {
+                    Some(solutions) => solutions.get_hashed_opt(key).is_some_and(matches_module),
+                    None => self
+                        .transaction
+                        .get_answers(&handle)
+                        .is_some_and(|answers| {
+                            answers
+                                .bindings()
+                                .key_to_idx_hashed_opt(key)
+                                .and_then(|idx| answers.get_idx(idx))
+                                .is_some_and(matches_module)
+                        }),
+                }
+            });
+        module_export
+            || self
+                .transaction
+                .resolve_named_import(self.importer, base, name.clone(), FindPreference::default())
+                .is_some_and(|(handle, _, _)| {
+                    module_matches_target(handle.module(), self.target_module)
+                })
+    }
+
     fn visit_import_from(&mut self, import_from: &StmtImportFrom) {
         let base = self.current_module.new_maybe_relative(
             self.is_init,
@@ -249,18 +297,7 @@ impl ImportUsageVisitor<'_> {
             return;
         }
         for alias in &import_from.names {
-            let refers_to_target = self
-                .transaction
-                .resolve_named_import(
-                    self.importer,
-                    base,
-                    alias.name.id.clone(),
-                    FindPreference::default(),
-                )
-                .is_some_and(|(handle, _, _)| {
-                    module_matches_target(handle.module(), self.target_module)
-                });
-            if refers_to_target {
+            if self.named_import_refers_to_target(base, &alias.name.id) {
                 self.ranges.push(import_from.range());
                 return;
             }

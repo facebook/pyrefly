@@ -105,10 +105,15 @@ impl ModuleType {
         self.modules = Arc::new(modules);
     }
 
-    pub fn is_submodules_imported_directly(&self) -> bool {
-        let prefix = self.parts();
+    /// Directly imported modules accessible beneath this module value's current path.
+    pub fn imported_modules(&self) -> impl Iterator<Item = ModuleName> + '_ {
         self.modules
             .iter()
-            .any(|name| name.components().starts_with(prefix))
+            .copied()
+            .filter(|name| name.components().starts_with(self.parts()))
+    }
+
+    pub fn is_submodules_imported_directly(&self) -> bool {
+        self.imported_modules().next().is_some()
     }
 }
