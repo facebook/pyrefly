@@ -38,6 +38,43 @@ Default configuration
 [0]
 ```
 
+## Dump config with --full
+
+<!-- Default settings are matched with globs so that new config fields do not
+require updating this test. -->
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/full/src && touch $TMPDIR/full/src/a.py && \
+> printf 'project-includes = ["src/**/*.py"]\npython-version = "3.12.0"\nuse-ignore-files = false\nnot-a-real-key = 1\n\n[errors]\nmissing-import = "warn"\nbad-assignment = "error"\n\n[[sub-config]]\nmatches = "src/**"\ncheck-unannotated-defs = false\n\n[sub-config.errors]\nmissing-import = "ignore"\nbad-assignment = "warn"\n' > $TMPDIR/full/pyrefly.toml && \
+> $PYREFLY dump-config --full --python-version 3.11.0 $TMPDIR/full/src/a.py
+Configuration at `*/full/pyrefly.toml` (glob)
+  Using interpreter: * (glob)
+  Configuration settings (TOML):
+* (glob+)
+    not-a-real-key = 1
+* (glob+)
+    python-version = "3.11.0"
+* (glob+)
+    use-ignore-files = false
+* (glob+)
+    [errors]
+    bad-assignment = "error"
+    missing-import = "warn"
+* (glob+)
+    [[sub-config]]
+    check-unannotated-defs = false
+    matches = "*/full/src/**/*" (glob)
+* (glob+)
+    [sub-config.errors]
+    bad-assignment = "warn"
+    missing-import = "ignore"
+  Covered files:
+    */full/src/a.py (glob)
+  Resolving imports from:
+* (glob+)
+[0]
+```
+
 ## Specify both files and config
 
 ```scrut {output_stream: stderr}
