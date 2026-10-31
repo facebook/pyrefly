@@ -6,6 +6,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::lined_buffer::LinedBuffer;
 use regex::Regex;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::PySourceType;
@@ -132,6 +134,57 @@ pub struct SerializedSuppressionEdit {
     pub replacement: String,
 }
 
+/// Per-run usage information for one suppression comment.
+///
+/// Multi-environment checks can merge these reports and remove only the
+/// suppressions that were unused in every environment.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SuppressionUsage {
+    /// The file path where the suppression comment occurs.
+    pub path: PathBuf,
+    /// The 0-indexed line number of the suppression comment.
+    pub line: usize,
+    /// The byte offset of the suppression comment within the line.
+    pub comment_offset: usize,
+    /// The exact source text of the suppression comment, used to reject stale reports.
+    pub comment: String,
+    /// The suppression tool, for example `pyrefly`, `pyre`, or `type`.
+    pub tool: String,
+    /// The codes listed in the suppression. An empty list means blanket suppression.
+    pub codes: Vec<String>,
+    /// The error codes suppressed on this suppression's affected line in this run.
+    ///
+    /// For blanket suppressions, this contains the names of all suppressed
+    /// errors on the affected line.
+    pub used_codes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SuppressionUsageKey {
+    path: PathBuf,
+    line: usize,
+    comment_offset: usize,
+    comment: String,
+    tool: String,
+    codes: Vec<String>,
+}
+
+impl SuppressionUsageKey {
+    fn from_usage(usage: &SuppressionUsage) -> Self {
+        let mut codes = usage.codes.clone();
+        codes.sort();
+        codes.dedup();
+        Self {
+            path: usage.path.clone(),
+            line: usage.line,
+            comment_offset: usage.comment_offset,
+            comment: usage.comment.clone(),
+            tool: usage.tool.clone(),
+            codes,
+        }
+    }
+}
+
 impl SerializedError {
     /// Creates a SerializedError from an internal Error.
     /// Returns None if the error is not from a filesystem path.
@@ -197,6 +250,112 @@ impl SerializedError {
     pub fn is_suppressable(&self) -> bool {
         !self.is_directive() && !self.is_unused_ignore()
     }
+}
+
+/// Convert suppression usage reports into unused-ignore diagnostics.
+///
+/// If the same source tree is checked under multiple environments, callers can
+/// pass all reports together. A code is considered used if it was used in any
+/// report for the same suppression comment.
+pub fn unused_errors_from_suppression_usage(
+    reports: Vec<SuppressionUsage>,
+    kind: UnusedIgnoreKind,
+) -> anyhow::Result<Vec<SerializedError>> {
+    let mut merged: HashMap<SuppressionUsageKey, SmallSet<String>> = HashMap::new();
+    for report in reports {
+        let key = SuppressionUsageKey::from_usage(&report);
+        merged.entry(key).or_default().extend(report.used_codes);
+    }
+
+    let mut errors = Vec::new();
+    for (key, used_codes) in merged {
+        let include = match key.tool.as_str() {
+            "pyrefly" | "pyre" => kind.includes_pyrefly_or_pyre(),
+            "type" => kind.includes_type(),
+            _ => false,
+        };
+        if !include {
+            continue;
+        }
+
+        let (tool, name, unused_codes) = match key.tool.as_str() {
+            "pyrefly" => {
+                if key.codes.is_empty() {
+                    if !used_codes.is_empty() {
+                        continue;
+                    }
+                    (Tool::Pyrefly, ErrorKind::UnusedIgnore, None)
+                } else {
+                    let unused_codes: SmallSet<_> = key
+                        .codes
+                        .iter()
+                        .filter(|code| !used_codes.contains(*code))
+                        .cloned()
+                        .collect();
+                    if unused_codes.is_empty() {
+                        continue;
+                    }
+                    let partially_unused = unused_codes.len() != key.codes.len();
+                    (
+                        Tool::Pyrefly,
+                        ErrorKind::UnusedIgnore,
+                        partially_unused.then_some(unused_codes),
+                    )
+                }
+            }
+            "pyre" => {
+                if !used_codes.is_empty() {
+                    continue;
+                }
+                (Tool::Pyre, ErrorKind::UnusedIgnore, None)
+            }
+            "type" => {
+                if !used_codes.is_empty() {
+                    continue;
+                }
+                (Tool::Type, ErrorKind::UnusedTypeIgnore, None)
+            }
+            _ => continue,
+        };
+        let ignore = Ignore::new(&key.comment);
+        let suppression = ignore
+            .iter()
+            .flat_map(|(_, suppressions)| suppressions)
+            .find(|supp| {
+                let mut codes = supp.error_codes().to_vec();
+                codes.sort();
+                codes.dedup();
+                supp.tool() == tool
+                    && supp.comment_offset() == 0
+                    && supp.comment_end_offset() == key.comment.len()
+                    && codes == key.codes
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "Suppression report does not match its comment for {}:{}",
+                    key.path.display(),
+                    key.line + 1,
+                )
+            })?;
+        let buffer = LinedBuffer::new(Arc::new(key.comment));
+        let edit = suppression.removal_edit(&buffer, unused_codes.as_ref());
+        errors.push(SerializedError {
+            path: key.path,
+            line: key.line,
+            name: name.to_name().to_owned(),
+            suppression_edit: Some(SerializedSuppressionEdit {
+                tool,
+                start: key.comment_offset,
+                end: key.comment_offset + edit.expected.len(),
+                expected: edit.expected,
+                replacement: edit.replacement,
+            }),
+        });
+    }
+    errors.sort_by(|left, right| {
+        (&left.path, left.line, &left.name).cmp(&(&right.path, right.line, &right.name))
+    });
+    Ok(errors)
 }
 
 /// Detects the line ending style used in a string.
@@ -1002,6 +1161,7 @@ mod tests {
         let (errors, _tdir) = get_errors("# type: ignore\n\nx: int = \"bad\"\n");
         let collected = errors.collect_errors();
         assert!(errors.collect_unused_ignore_errors(&collected).is_empty());
+        assert!(errors.collect_suppression_usage(&collected).is_empty());
     }
 
     #[test]
@@ -2312,6 +2472,110 @@ a: int = ""
             "# pyrefly: ignore[bad-assignment]",
         )];
         assert_remove_ignores_from_serialized(before, errors, after, 1);
+    }
+
+    #[test]
+    fn test_unused_errors_from_suppression_usage_merges_environments() {
+        let path = PathBuf::from("test.py");
+        let env_with_error = SuppressionUsage {
+            path: path.clone(),
+            line: 0,
+            comment_offset: 0,
+            comment: "# pyrefly: ignore[bad-assignment, bad-return]".to_owned(),
+            tool: "pyrefly".to_owned(),
+            codes: vec!["bad-assignment".to_owned(), "bad-return".to_owned()],
+            used_codes: vec!["bad-assignment".to_owned()],
+        };
+        let env_without_error = SuppressionUsage {
+            path: path.clone(),
+            line: 0,
+            comment_offset: 0,
+            comment: env_with_error.comment.clone(),
+            tool: "pyrefly".to_owned(),
+            codes: vec!["bad-return".to_owned(), "bad-assignment".to_owned()],
+            used_codes: Vec::new(),
+        };
+
+        let errors = suppress::unused_errors_from_suppression_usage(
+            vec![env_with_error, env_without_error],
+            UnusedIgnoreKind::Pyrefly,
+        )
+        .unwrap();
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path, path);
+        assert_eq!(
+            errors[0].suppression_edit.as_ref().unwrap().replacement,
+            "# pyrefly: ignore[bad-assignment]"
+        );
+        assert_remove_ignores_from_serialized(
+            "# pyrefly: ignore[bad-assignment, bad-return]\nx: int = \"\"\n",
+            errors,
+            "# pyrefly: ignore[bad-assignment]\nx: int = \"\"\n",
+            1,
+        );
+    }
+
+    #[test]
+    fn test_suppression_usage_removes_unused_comments() {
+        for (tool, comment, kind) in [
+            ("pyrefly", "# pyrefly: ignore", UnusedIgnoreKind::Pyrefly),
+            ("pyre", "# pyre-fixme", UnusedIgnoreKind::Pyrefly),
+            ("type", "# type: ignore", UnusedIgnoreKind::Type),
+        ] {
+            let report = SuppressionUsage {
+                path: PathBuf::from("test.py"),
+                line: 0,
+                comment_offset: 7,
+                comment: comment.to_owned(),
+                tool: tool.to_owned(),
+                codes: Vec::new(),
+                used_codes: Vec::new(),
+            };
+            assert!(
+                unused_errors_from_suppression_usage(
+                    vec![SuppressionUsage {
+                        used_codes: vec!["bad-assignment".to_owned()],
+                        ..report.clone()
+                    }],
+                    kind,
+                )
+                .unwrap()
+                .is_empty()
+            );
+            let errors = unused_errors_from_suppression_usage(vec![report], kind).unwrap();
+            assert_remove_ignores_from_serialized_with_kind(
+                &format!("x = 1  {comment}\n"),
+                errors,
+                "x = 1\n",
+                1,
+                kind,
+            );
+        }
+    }
+
+    #[test]
+    fn test_suppression_usage_rejects_stale_source() {
+        let tdir = tempfile::tempdir().unwrap();
+        let path = get_path(&tdir);
+        let input = "# pyrefly: ignore[bad-return]\nx = 1\n";
+        fs_anyhow::write(&path, input).unwrap();
+        let report = SuppressionUsage {
+            path: path.clone(),
+            line: 0,
+            comment_offset: 0,
+            comment: "# pyrefly: ignore[bad-assignment]".to_owned(),
+            tool: "pyrefly".to_owned(),
+            codes: vec!["bad-assignment".to_owned()],
+            used_codes: Vec::new(),
+        };
+        let errors =
+            unused_errors_from_suppression_usage(vec![report], UnusedIgnoreKind::Pyrefly).unwrap();
+        let error = remove_unused_ignores_from_serialized(errors, UnusedIgnoreKind::Pyrefly)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no longer matches"));
+        assert_eq!(fs_anyhow::read_to_string(&path).unwrap(), input);
     }
 
     #[test]
