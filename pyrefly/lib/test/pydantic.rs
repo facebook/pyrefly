@@ -12,6 +12,7 @@ mod config;
 mod dataclasses;
 mod extra;
 mod field;
+mod model_validate;
 mod root_model;
 mod strictness;
 pub(crate) mod util;
